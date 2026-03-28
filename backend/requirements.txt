@@ -6,7 +6,7 @@ python-dotenv==1.0.1
 pydantic==1.10.14
 passlib[bcrypt]==1.7.4
 python-jose==3.3.0
-llama-index-core==0.10.50
-llama-index-vector-stores-qdrant==0.2.18
-qdrant-client==1.9.0
-scikit-learn==1.4.1.post1
+llama-index-core
+llama-index-vector-stores-qdrant
+qdrant-client
+scikit-learn

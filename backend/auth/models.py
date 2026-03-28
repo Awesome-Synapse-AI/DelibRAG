@@ -13,7 +13,7 @@ from db.postgres import Base
 
 class UserRole(str, enum.Enum):
     viewer = "viewer"
-    engineer = "engineer"
+    clinician = "clinician"
     manager = "manager"
     admin = "admin"
 

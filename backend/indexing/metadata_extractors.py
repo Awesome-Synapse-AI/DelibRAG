@@ -2,7 +2,7 @@ from typing import List
 
 from llama_index.core.extractors import EntityExtractor, SummaryExtractor
 
-ALLOWED_ROLES_DEFAULT = ["viewer", "engineer", "manager", "admin"]
+ALLOWED_ROLES_DEFAULT = ["viewer", "clinician", "manager", "admin"]
 
 
 def infer_allowed_roles(node) -> List[str]:

@@ -1,9 +1,8 @@
 import enum
-from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import Column, DateTime, Enum, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Enum, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -13,6 +12,7 @@ from db.postgres import Base
 
 class UserRole(str, enum.Enum):
     viewer = "viewer"
+    engineer = "engineer"
     clinician = "clinician"
     manager = "manager"
     admin = "admin"
@@ -25,9 +25,10 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String(255), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)
     role = Column(Enum(UserRole), nullable=False, default=UserRole.viewer)
-    department = Column(String(100), nullable=True)
+    department = Column(String(100), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
     refresh_token_hash = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -35,9 +36,9 @@ class User(Base):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
-    full_name: str
+    full_name: Optional[str] = None
     role: UserRole
-    department: Optional[str] = None
+    department: str
 
 
 class LoginRequest(BaseModel):

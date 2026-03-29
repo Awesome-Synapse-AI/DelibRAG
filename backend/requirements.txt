@@ -7,6 +7,10 @@ pydantic==1.10.14
 passlib[bcrypt]==1.7.4
 python-jose==3.3.0
 llama-index-core
-llama-index-vector-stores-qdrant
+llama-index-extractors-entity
+llama-index-vector-stores-qdrant>=0.10.0
+llama-index-embeddings-openai
+llama-index-llms-openai
 qdrant-client
 scikit-learn
+openai

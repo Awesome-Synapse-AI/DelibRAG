@@ -1,13 +1,24 @@
-from typing import Callable, Tuple
+from typing import Tuple
 
 from llama_index.core.node_parser import HierarchicalNodeParser, SentenceSplitter
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import StorageContext, VectorStoreIndex
+from llama_index.core import StorageContext, VectorStoreIndex, Settings
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.llms.openai import OpenAI
 
 from .metadata_extractors import default_metadata_extractors, infer_allowed_roles
 
 
-def build_indexing_pipeline(role: str, department: str):
+def build_indexing_pipeline(
+    role: str,
+    department: str,
+    llm_model: str = "gpt-5-nano",
+    embedding_model: str = "text-embedding-3-small",
+):
+    # Ensure global Settings are configured before extractors instantiate
+    Settings.llm = OpenAI(model=llm_model)
+    Settings.embed_model = OpenAIEmbedding(model=embedding_model)
+
     # 1. Hierarchical parser with sentence-level chunking
     node_parser = HierarchicalNodeParser.from_defaults(
         node_parser_ids=["large", "medium", "small"],
@@ -24,8 +35,8 @@ def build_indexing_pipeline(role: str, department: str):
     # 3. Custom metadata injector (role/department access control)
     def inject_custom_metadata(nodes):
         for node in nodes:
-            node.metadata["allowed_roles"] = infer_allowed_roles(node)
             node.metadata["department"] = department
+            node.metadata["allowed_roles"] = infer_allowed_roles(node, department=department)
             node.metadata["uploaded_by_role"] = role
             node.metadata["source_trust_score"] = 1.0
             node.metadata["is_deprecated"] = False
@@ -34,19 +45,35 @@ def build_indexing_pipeline(role: str, department: str):
     return node_parser, metadata_extractors, inject_custom_metadata
 
 
-def build_qdrant_index(client, collection: str, nodes, metadata_handlers: Tuple) -> VectorStoreIndex:
+def build_qdrant_index(
+    client,
+    collection: str,
+    nodes,
+    metadata_handlers: Tuple,
+    embedding_model: str = "text-embedding-3-small",
+    llm_model: str = "gpt-5-nano",
+) -> VectorStoreIndex:
     node_parser, metadata_extractors, metadata_injector = metadata_handlers
 
     parsed_nodes = node_parser.get_nodes_from_documents(nodes)
     parsed_nodes = metadata_injector(parsed_nodes)
 
+    previous_embed_model = Settings.embed_model
+    previous_llm = Settings.llm
+    Settings.embed_model = OpenAIEmbedding(model=embedding_model)
+    Settings.llm = OpenAI(model=llm_model)
+
     vector_store = QdrantVectorStore(client=client, collection_name=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    index = VectorStoreIndex.from_documents(
-        parsed_nodes,
-        storage_context=storage_context,
-        transformations=metadata_extractors,
-        show_progress=True,
-    )
+    try:
+        index = VectorStoreIndex.from_documents(
+            parsed_nodes,
+            storage_context=storage_context,
+            transformations=metadata_extractors,
+            show_progress=True,
+        )
+    finally:
+        Settings.embed_model = previous_embed_model
+        Settings.llm = previous_llm
     return index

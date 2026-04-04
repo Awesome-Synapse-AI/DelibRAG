@@ -88,13 +88,23 @@ async def retrieve_node(state: AgentState) -> AgentState:
     return state
 
 
+def get_llm():
+    return OpenAI(model="gpt-5-nano")
+
+
 async def answer_generate_node(state: AgentState) -> AgentState:
-    llm = OpenAI(model="gpt-5-nano")
+    llm = get_llm()
     prompt = build_prompt(state)
     response = await llm.acomplete(prompt)
     state["answer"] = getattr(response, "text", str(response))
     state["citations"] = extract_citations(state.get("retrieved_nodes") or [])
     return state
+
+
+async def answer_stream(prompt: str):
+    llm = get_llm()
+    async for chunk in llm.astream_complete(prompt):
+        yield getattr(chunk, "text", str(chunk))
 
 
 async def confidence_check_node(state: AgentState) -> AgentState:

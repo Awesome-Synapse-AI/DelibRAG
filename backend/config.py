@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     lda_vectorizer_path: str = "lda_vectorizer.pkl"
     gap_retrieval_score_threshold: float = 0.35
     gap_confidence_threshold: float = 0.45
+    mongo_uri: str = "mongodb://localhost:27017"
+    mongo_db_name: str = "delibrag"
 
     _backend_dir = Path(__file__).resolve().parent
     _env_paths = (

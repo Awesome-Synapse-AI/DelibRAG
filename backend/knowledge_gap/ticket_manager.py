@@ -131,3 +131,12 @@ async def close_ticket(
     await db.commit()
     await db.refresh(ticket)
     return ticket
+
+
+async def delete_gap_ticket(db: AsyncSession, ticket_id: str) -> bool:
+    ticket = await get_gap_ticket(db, ticket_id)
+    if not ticket:
+        return False
+    await db.delete(ticket)
+    await db.commit()
+    return True

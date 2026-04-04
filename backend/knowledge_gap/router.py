@@ -13,6 +13,7 @@ from .ticket_manager import (
     GapTicketResolvePayload,
     assign_gap_ticket,
     create_gap_ticket,
+    delete_gap_ticket,
     get_gap_ticket,
     list_gap_tickets,
 )
@@ -106,3 +107,15 @@ async def resolve_gap(
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap ticket not found")
     return _serialize_ticket(ticket)
+
+
+@router.delete("/{ticket_id}")
+async def delete_gap(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_role(UserRole.admin)),
+):
+    deleted = await delete_gap_ticket(db, ticket_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap ticket not found")
+    return {"deleted": True, "id": ticket_id}

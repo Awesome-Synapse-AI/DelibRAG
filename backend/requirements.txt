@@ -4,6 +4,7 @@ sqlalchemy[asyncio]==2.0.27
 asyncpg==0.29.0
 python-dotenv==1.0.1
 pydantic>=2.8,<3
+pydantic[email]>=2.8,<3
 pydantic-settings>=2.2,<3
 passlib[bcrypt]==1.7.4
 python-jose==3.3.0
@@ -12,6 +13,10 @@ llama-index-extractors-entity
 llama-index-vector-stores-qdrant>=0.10.0
 llama-index-embeddings-openai
 llama-index-llms-openai
+llama-index-retrievers-bm25
 qdrant-client
 scikit-learn
 openai
+motor
+langgraph
+langchain-core

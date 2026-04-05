@@ -23,9 +23,14 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     if existing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email already registered")
 
+    try:
+        password_hash = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
     user = User(
         email=payload.email,
-        password_hash=hash_password(payload.password),
+        password_hash=password_hash,
         full_name=payload.full_name,
         role=payload.role,
         department=payload.department,

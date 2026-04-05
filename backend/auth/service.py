@@ -10,7 +10,7 @@ from config import get_settings
 from .models import User, UserRole
 
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 settings = get_settings()
 
 
@@ -22,9 +22,10 @@ def verify_password(password: str, hashed: str) -> bool:
     return pwd_context.verify(password, hashed)
 
 
-def create_access_token(*, user_id: str, role: UserRole, department: Optional[str]) -> str:
+def create_access_token(*, user_id: str, role, department: Optional[str]) -> str:
     expire = datetime.utcnow() + timedelta(minutes=settings.access_token_exp_minutes)
-    payload = {"sub": str(user_id), "role": role.value, "department": department, "exp": expire}
+    role_value = role.value if hasattr(role, "value") else str(role)
+    payload = {"sub": str(user_id), "role": role_value, "department": department, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

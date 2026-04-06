@@ -42,6 +42,7 @@ class GapDetector:
     async def check_gap(self, state: AgentState) -> Optional[Dict[str, Any]]:
         nodes = state.get("retrieved_nodes") or []
         query = state.get("query", "")
+        stakes = (state.get("stakes_level") or "").lower()
 
         # Condition A: No relevant docs.
         max_score = max((self._node_score(n) for n in nodes), default=0.0)
@@ -64,7 +65,13 @@ class GapDetector:
             )
 
         # Condition B: Contradiction detection.
-        contradiction = await self._detect_contradiction(nodes, query)
+        contradiction = None
+        if stakes != "low":
+            existing = ((state.get("audit_trail") or {}).get("contradictions_found") or [])
+            if existing:
+                contradiction = existing[0]
+            else:
+                contradiction = await self._detect_contradiction(nodes, query)
         if contradiction:
             return self._build_gap_ticket(
                 state,
@@ -77,7 +84,7 @@ class GapDetector:
         scope_result = state.get("scope_result") or {}
         in_scope = bool(state.get("in_scope", scope_result.get("in_scope", False)))
         confidence = float(state.get("confidence", 1.0))
-        if in_scope and confidence < self.confidence_threshold:
+        if stakes != "low" and in_scope and confidence < self.confidence_threshold:
             return self._build_gap_ticket(
                 state,
                 gap_type="low_confidence",

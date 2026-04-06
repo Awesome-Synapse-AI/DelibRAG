@@ -1,6 +1,5 @@
 from typing import Optional
 
-import asyncio
 import json
 import os
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -13,21 +12,9 @@ from llama_index.core import StorageContext, VectorStoreIndex
 from auth.dependencies import get_current_user
 from agent.graph import build_agent_graph
 from agent.memory import delete_session as delete_session_store, list_sessions as list_sessions_store
-from agent.nodes import (
-    answer_stream,
-    build_prompt,
-    drop_deprecated_nodes,
-    extract_citations,
-    get_retriever_for_user,
-    rerank_by_trust_score,
-)
+from agent.nodes import high_stakes_retrieve_node, low_stakes_retrieve_node
 from agent.state import AgentState
-from agent.stakes_classifier import classify_stakes
-from agent.confidence_gate import confidence_gate
-from agent.memory import load_session_history, save_to_session
-from retrieval.context_builder import build_context_string
-from retrieval.entity_filter import filter_nodes_by_query_entities
-from retrieval.scope_classifier import ScopeClassifier, evaluate_scope_result
+from agent.stakes_classifier import StakesClassifier
 from config import get_settings
 from indexing.pipeline import get_collection_persist_dir
 
@@ -37,6 +24,11 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     session_id: str
+    query: str
+
+
+class ChatDevRequest(BaseModel):
+    role: str
     query: str
 
 
@@ -97,14 +89,17 @@ def _collection_for_department(department: Optional[str]) -> str:
     return settings.default_collection_name
 
 
-@router.post("/chat")
-async def chat(payload: ChatRequest, user=Depends(get_current_user)):
+def _department_for_role(role: str) -> str:
+    normalized = (role or "").strip().lower()
+    if normalized in {"clinician", "clinical"}:
+        return "clinical"
+    if normalized in {"manager", "management"}:
+        return "management"
+    return "general"
+
+
+def _build_index_for_department(department: str):
     settings = get_settings()
-    if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "OPENAI_API_KEY is not set in backend container environment",
-        )
     client = QdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
@@ -115,7 +110,7 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
         port=settings.qdrant_port,
         check_compatibility=False,
     )
-    collection = _collection_for_department(user.department)
+    collection = _collection_for_department(department)
     _ensure_qdrant_ready(client, collection)
     persist_dir = get_collection_persist_dir(collection)
     if not persist_dir.exists():
@@ -129,6 +124,18 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
         persist_dir=str(persist_dir),
     )
     index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
+    return collection, index, storage_context
+
+
+@router.post("/chat")
+async def chat(payload: ChatRequest, user=Depends(get_current_user)):
+    settings = get_settings()
+    if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "OPENAI_API_KEY is not set in backend container environment",
+        )
+    _collection, index, storage_context = _build_index_for_department(user.department)
 
     graph = build_agent_graph()
     state: AgentState = {
@@ -147,6 +154,68 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
         "confidence": result.get("confidence"),
         "stakes_level": result.get("stakes_level"),
         "gap_ticket_id": result.get("gap_ticket_id"),
+        "requires_human_review": result.get("requires_human_review"),
+        "query_id": result.get("query_id"),
+    }
+
+
+@router.post("/chat/dev/stakes")
+async def chat_dev_stakes(payload: ChatDevRequest):
+    settings = get_settings()
+    if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "OPENAI_API_KEY is not set in backend container environment",
+        )
+    role = (payload.role or "").strip().lower()
+    department = _department_for_role(role)
+    _collection, index, storage_context = _build_index_for_department(department)
+
+    stakes_classifier = StakesClassifier()
+    stakes_classification = await stakes_classifier.classify(query=payload.query, user_role=role)
+    stakes_level = stakes_classification["stakes_level"]
+
+    state: AgentState = {
+        "session_id": "dev-stakes-check",
+        "query": payload.query,
+        "user_id": "dev-chat-user",
+        "user_role": role,
+        "user_department": department,
+        "stakes_level": stakes_level,
+        "stakes_classification": stakes_classification,
+        "index": index,
+        "storage_context": storage_context,
+    }
+
+    if stakes_level == "high":
+        result = await high_stakes_retrieve_node(state)
+        retrieval_path = "high_stakes_retrieve"
+    else:
+        result = await low_stakes_retrieve_node(state)
+        retrieval_path = "low_stakes_retrieve"
+
+    nodes = result.get("retrieved_nodes") or []
+    top_sources = []
+    for n in nodes[:5]:
+        meta = {}
+        if hasattr(n, "metadata"):
+            meta = n.metadata or {}
+        elif hasattr(n, "node") and hasattr(n.node, "metadata"):
+            meta = n.node.metadata or {}
+        src = meta.get("doc_id") or meta.get("source_id") or meta.get("source")
+        if src:
+            top_sources.append(str(src))
+
+    return {
+        "stakes_level": stakes_level,
+        "stakes_classification": stakes_classification,
+        "retrieval_path": retrieval_path,
+        "retrieved_count": len(nodes),
+        "raw_vector_max_score": result.get("raw_vector_max_score"),
+        "query_entities": result.get("query_entities", []),
+        "top_sources": top_sources,
+        "role": role,
+        "department": department,
     }
 
 
@@ -158,30 +227,7 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "OPENAI_API_KEY is not set in backend container environment",
         )
-    client = QdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-        check_compatibility=False,
-    )
-    aclient = AsyncQdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-        check_compatibility=False,
-    )
-    collection = _collection_for_department(user.department)
-    _ensure_qdrant_ready(client, collection)
-    persist_dir = get_collection_persist_dir(collection)
-    if not persist_dir.exists():
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            f"Local index storage missing for collection '{collection}'. Run scripts/run_llamaindex.py first.",
-        )
-    vector_store = QdrantVectorStore(client=client, aclient=aclient, collection_name=collection)
-    storage_context = StorageContext.from_defaults(
-        vector_store=vector_store,
-        persist_dir=str(persist_dir),
-    )
-    index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
+    _collection, index, storage_context = _build_index_for_department(user.department)
 
     state: AgentState = {
         "session_id": payload.session_id,
@@ -194,54 +240,27 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
     }
 
     async def event_stream():
-        state["messages"] = await load_session_history(state["session_id"])
-        scope = ScopeClassifier(department=state.get("user_department")).classify(state["query"])
-        state["scope_result"] = scope
-        scope_decision = evaluate_scope_result(scope, state.get("retrieved_nodes"))
-        if scope_decision.get("action") == "out_of_scope":
-            answer = "This question appears outside the current knowledge base scope."
-            await save_to_session(state["session_id"], state["user_id"], {"role": "user", "content": state["query"]})
-            await save_to_session(state["session_id"], state["user_id"], {"role": "assistant", "content": answer})
-            yield f"data: {json.dumps({'type':'final','content':answer})}\n\n"
-            return
-
-        state["stakes_level"] = classify_stakes(state["query"], state.get("user_role"))
-        retriever = get_retriever_for_user(state)
-        nodes = await retriever.aretrieve(state["query"])
-        nodes, entities = await filter_nodes_by_query_entities(state["query"], nodes)
-        nodes = drop_deprecated_nodes(nodes)
-        nodes = rerank_by_trust_score(nodes)
-        state["retrieved_nodes"] = nodes
-        state["query_entities"] = entities
-        state["context"] = build_context_string(nodes)
-
-        prompt = build_prompt(state)
-        chunks = []
-        async for token in answer_stream(prompt):
-            if token:
-                chunks.append(token)
-                yield f"data: {json.dumps({'type':'chunk','content':token})}\n\n"
-
-        answer = "".join(chunks)
-        state["answer"] = answer
-        state["citations"] = extract_citations(nodes)
-        state["confidence"] = 0.5
-        state["confidence_gate_passed"] = confidence_gate(state["confidence"])
-
-        await save_to_session(state["session_id"], state["user_id"], {"role": "user", "content": state["query"]})
-        await save_to_session(
-            state["session_id"],
-            state["user_id"],
-            {
-                "role": "assistant",
-                "content": answer,
-                "citations": state["citations"],
-                "confidence": state["confidence"],
-                "stakes_level": state["stakes_level"],
-            },
+        graph = build_agent_graph()
+        result = await graph.ainvoke(state)
+        answer = result.get("answer") or ""
+        # Keep SSE shape; emit one chunk + final envelope.
+        yield f"data: {json.dumps({'type':'chunk','content':answer})}\n\n"
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "type": "final",
+                    "answer": answer,
+                    "citations": result.get("citations"),
+                    "confidence": result.get("confidence"),
+                    "stakes_level": result.get("stakes_level"),
+                    "gap_ticket_id": result.get("gap_ticket_id"),
+                    "requires_human_review": result.get("requires_human_review"),
+                    "query_id": result.get("query_id"),
+                }
+            )
+            + "\n\n"
         )
-
-        yield f"data: {json.dumps({'type':'final','citations':state['citations'], 'confidence':state['confidence'], 'stakes_level':state['stakes_level'], 'gap_ticket_id':state.get('gap_ticket_id')})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 

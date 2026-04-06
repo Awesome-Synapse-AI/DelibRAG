@@ -2,12 +2,15 @@ from langgraph.graph import END, StateGraph
 
 from agent.nodes import (
     answer_generate_node,
+    audit_log_node,
     confidence_check_node,
     gap_detect_node,
+    high_stakes_retrieve_node,
     load_history_node,
+    low_stakes_retrieve_node,
+    medium_stakes_retrieve_node,
     memory_save_node,
     out_of_scope_response_node,
-    retrieve_node,
     scope_check_node,
     stakes_classify_node,
 )
@@ -20,10 +23,13 @@ def build_agent_graph():
     graph.add_node("load_history", load_history_node)
     graph.add_node("scope_check", scope_check_node)
     graph.add_node("stakes_classify", stakes_classify_node)
-    graph.add_node("retrieve", retrieve_node)
+    graph.add_node("low_stakes_retrieve", low_stakes_retrieve_node)
+    graph.add_node("medium_stakes_retrieve", medium_stakes_retrieve_node)
+    graph.add_node("high_stakes_retrieve", high_stakes_retrieve_node)
     graph.add_node("gap_detect", gap_detect_node)
     graph.add_node("answer_generate", answer_generate_node)
     graph.add_node("confidence_check", confidence_check_node)
+    graph.add_node("audit_log", audit_log_node)
     graph.add_node("out_of_scope_response", out_of_scope_response_node)
     graph.add_node("memory_save", memory_save_node)
 
@@ -44,7 +50,23 @@ def build_agent_graph():
         },
     )
 
-    graph.add_edge("stakes_classify", "retrieve")
+    def route_after_stakes(state: AgentState):
+        stakes = state.get("stakes_level", "medium")
+        if stakes == "low":
+            return "low_stakes_retrieve"
+        if stakes == "high":
+            return "high_stakes_retrieve"
+        return "medium_stakes_retrieve"
+
+    graph.add_conditional_edges(
+        "stakes_classify",
+        route_after_stakes,
+        {
+            "low_stakes_retrieve": "low_stakes_retrieve",
+            "medium_stakes_retrieve": "medium_stakes_retrieve",
+            "high_stakes_retrieve": "high_stakes_retrieve",
+        },
+    )
 
     def route_after_retrieve(state: AgentState):
         from retrieval.scope_classifier import evaluate_scope_result
@@ -55,7 +77,23 @@ def build_agent_graph():
         return "answer_generate"
 
     graph.add_conditional_edges(
-        "retrieve",
+        "low_stakes_retrieve",
+        route_after_retrieve,
+        {
+            "gap_detect": "gap_detect",
+            "answer_generate": "answer_generate",
+        },
+    )
+    graph.add_conditional_edges(
+        "medium_stakes_retrieve",
+        route_after_retrieve,
+        {
+            "gap_detect": "gap_detect",
+            "answer_generate": "answer_generate",
+        },
+    )
+    graph.add_conditional_edges(
+        "high_stakes_retrieve",
         route_after_retrieve,
         {
             "gap_detect": "gap_detect",
@@ -65,8 +103,9 @@ def build_agent_graph():
 
     graph.add_edge("gap_detect", "answer_generate")
     graph.add_edge("answer_generate", "confidence_check")
-    graph.add_edge("confidence_check", "memory_save")
-    graph.add_edge("out_of_scope_response", "memory_save")
+    graph.add_edge("confidence_check", "audit_log")
+    graph.add_edge("audit_log", "memory_save")
+    graph.add_edge("out_of_scope_response", "audit_log")
     graph.add_edge("memory_save", END)
 
     return graph.compile()

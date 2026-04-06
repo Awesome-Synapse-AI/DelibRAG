@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import sys
 import os
 
@@ -15,14 +16,18 @@ if str(ROOT) not in sys.path:
 # override=True ensures stale shell values do not shadow .env entries.
 load_dotenv(ROOT / ".env", override=True)
 
-from backend.indexing.pipeline import build_indexing_pipeline, build_qdrant_index
+from backend.indexing.pipeline import (
+    build_indexing_pipeline,
+    build_qdrant_index,
+    get_collection_persist_dir,
+)
 
 
 COLLECTIONS = [
     {
         "name": "manager-info",
         "files": [
-            # str(ROOT / "sample-docs" / "low-stake-manager-doc.md"),
+            str(ROOT / "sample-docs" / "low-stake-manager-doc.md"),
             str(ROOT / "sample-docs" / "high-stake-manager-doc.md"),
         ],
         "role": "manager",
@@ -31,7 +36,7 @@ COLLECTIONS = [
     {
         "name": "clinical-info",
         "files": [
-            # str(ROOT / "sample-docs" / "low-stake-clinical-doc.md"),
+            str(ROOT / "sample-docs" / "low-stake-clinical-doc.md"),
             str(ROOT / "sample-docs" / "high-stake-clinical-doc.md"),
         ],
         "role": "clinician",
@@ -63,6 +68,15 @@ def main():
         if not docs:
             print(f"No docs for collection {cfg['name']}; skipping.")
             continue
+
+        if client.collection_exists(cfg["name"]):
+            client.delete_collection(cfg["name"])
+            print(f"Reset qdrant collection: {cfg['name']}")
+
+        persist_dir = get_collection_persist_dir(cfg["name"])
+        if persist_dir.exists():
+            shutil.rmtree(persist_dir)
+            print(f"Reset local index storage: {persist_dir}")
 
         handlers = build_indexing_pipeline(cfg["role"], cfg["department"])
         build_qdrant_index(client, cfg["name"], docs, handlers)

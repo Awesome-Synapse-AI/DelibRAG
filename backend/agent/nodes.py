@@ -8,7 +8,8 @@ from agent.stakes_classifier import classify_stakes
 from agent.state import AgentState
 from knowledge_gap.detector import GapDetector
 from retrieval.context_builder import build_context_string
-from retrieval.hybrid_retriever import build_hybrid_retriever
+from retrieval.entity_filter import filter_nodes_by_query_entities
+from retrieval.hybrid_retriever import build_hybrid_retriever, build_vector_retriever
 from retrieval.scope_classifier import ScopeClassifier, evaluate_scope_result
 
 
@@ -31,6 +32,20 @@ def rerank_by_trust_score(nodes: List[Any]) -> List[Any]:
         return float(meta.get("source_trust_score", 1.0))
 
     return sorted(nodes, key=_score, reverse=True)
+
+
+def drop_deprecated_nodes(nodes: List[Any]) -> List[Any]:
+    active: List[Any] = []
+    for n in nodes:
+        meta = {}
+        if hasattr(n, "metadata"):
+            meta = n.metadata or {}
+        elif hasattr(n, "node") and hasattr(n.node, "metadata"):
+            meta = n.node.metadata or {}
+        if meta.get("is_deprecated") is True:
+            continue
+        active.append(n)
+    return active
 
 
 def extract_citations(nodes: List[Any]) -> List[str]:
@@ -68,7 +83,7 @@ def build_prompt(state: AgentState) -> str:
 
 
 async def scope_check_node(state: AgentState) -> AgentState:
-    classifier = ScopeClassifier()
+    classifier = ScopeClassifier(department=state.get("user_department"))
     result = classifier.classify(state["query"])
     state["scope_result"] = result
     return state
@@ -82,9 +97,16 @@ async def stakes_classify_node(state: AgentState) -> AgentState:
 async def retrieve_node(state: AgentState) -> AgentState:
     retriever = get_retriever_for_user(state)
     nodes = await retriever.aretrieve(state["query"])
+    nodes, entities = await filter_nodes_by_query_entities(state["query"], nodes)
+    nodes = drop_deprecated_nodes(nodes)
     nodes = rerank_by_trust_score(nodes)
     state["retrieved_nodes"] = nodes
     state["context"] = build_context_string(nodes)
+    state["query_entities"] = entities
+    user = type("User", (), {"role": state["user_role"], "department": state["user_department"]})
+    vector_retriever = build_vector_retriever(index=state["index"], user=user, similarity_top_k=10)
+    vector_nodes = drop_deprecated_nodes(await vector_retriever.aretrieve(state["query"]))
+    state["raw_vector_max_score"] = max((float(getattr(n, "score", 0.0) or 0.0) for n in vector_nodes), default=0.0)
     return state
 
 

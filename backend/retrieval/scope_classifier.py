@@ -1,8 +1,11 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 import joblib
+
+logger = logging.getLogger(__name__)
 
 
 class ScopeClassifier:
@@ -12,26 +15,44 @@ class ScopeClassifier:
         lda_path: str = "lda_model.pkl",
         vec_path: str = "lda_vectorizer.pkl",
         threshold: float = 0.15,
+        department: Optional[str] = None,
     ):
-        manifest_file = Path(manifest_path)
-        lda_file = Path(lda_path)
-        vec_file = Path(vec_path)
+        manifest_file, lda_file, vec_file = self._resolve_files(
+            manifest_path=manifest_path,
+            lda_path=lda_path,
+            vec_path=vec_path,
+            department=department,
+        )
 
-        if not manifest_file.exists():
-            raise FileNotFoundError(f"Scope manifest not found: {manifest_file}")
-        if not lda_file.exists():
-            raise FileNotFoundError(f"LDA model file not found: {lda_file}")
-        if not vec_file.exists():
-            raise FileNotFoundError(f"LDA vectorizer file not found: {vec_file}")
+        self.threshold = threshold
+        self.enabled = all([manifest_file, lda_file, vec_file])
+
+        if not self.enabled:
+            self.manifest = {"topics": []}
+            self.lda = None
+            self.vectorizer = None
+            logger.warning(
+                "ScopeClassifier disabled: missing model artifacts. "
+                "Set scope files in /app/scripts/lda_domains/{clinical|manager}/."
+            )
+            return
 
         with manifest_file.open("r", encoding="utf-8") as f:
-            self.manifest: Dict[str, Any] = json.load(f)
+            self.manifest = json.load(f)
 
         self.lda = joblib.load(lda_file)
         self.vectorizer = joblib.load(vec_file)
-        self.threshold = threshold
 
     def classify(self, query: str) -> Dict[str, Any]:
+        if not self.enabled:
+            return {
+                "in_scope": True,
+                "matched_topic": None,
+                "keywords": [],
+                "confidence": 0.0,
+                "reason": "Scope model unavailable; skipping out-of-scope gate.",
+            }
+
         X = self.vectorizer.transform([query])
         topic_probs = self.lda.transform(X)[0]
         best_topic_idx = int(topic_probs.argmax())
@@ -59,6 +80,52 @@ class ScopeClassifier:
         if not topics or topic_idx >= len(topics):
             return {"label": f"topic_{topic_idx}", "keywords": []}
         return topics[topic_idx]
+
+    def _resolve_files(
+        self,
+        manifest_path: str,
+        lda_path: str,
+        vec_path: str,
+        department: Optional[str],
+    ) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
+        dep = (department or "").strip().lower()
+        if dep in {"clinical", "clinician"}:
+            domain = "clinical"
+        elif dep in {"manager", "management"}:
+            domain = "manager"
+        else:
+            domain = None
+
+        candidates: list[tuple[Path, Path, Path]] = []
+        base = Path(__file__).resolve().parents[2]
+
+        # Explicit paths first (if provided as absolute or relative in /app)
+        candidates.append((Path(manifest_path), Path(lda_path), Path(vec_path)))
+
+        # Common runtime locations inside backend container
+        if domain:
+            domain_dir = Path("/app/scripts/lda_domains") / domain
+            candidates.append(
+                (
+                    domain_dir / "scope_manifest.json",
+                    domain_dir / "lda_model.pkl",
+                    domain_dir / "lda_vectorizer.pkl",
+                )
+            )
+            local_domain_dir = base / "scripts" / "lda_domains" / domain
+            candidates.append(
+                (
+                    local_domain_dir / "scope_manifest.json",
+                    local_domain_dir / "lda_model.pkl",
+                    local_domain_dir / "lda_vectorizer.pkl",
+                )
+            )
+
+        for manifest_file, lda_file, vec_file in candidates:
+            if manifest_file.exists() and lda_file.exists() and vec_file.exists():
+                return manifest_file, lda_file, vec_file
+
+        return None, None, None
 
 
 def evaluate_scope_result(scope_result: Dict[str, Any], retrieved_docs: Optional[Sequence[Any]]) -> Dict[str, Any]:

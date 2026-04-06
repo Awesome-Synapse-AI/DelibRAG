@@ -1,8 +1,10 @@
+from pathlib import Path
 from typing import Tuple
 
 from llama_index.core.node_parser import HierarchicalNodeParser, SentenceSplitter
 from llama_index.vector_stores.qdrant import QdrantVectorStore
-from llama_index.core import StorageContext, VectorStoreIndex, Settings
+from llama_index.core import Document, StorageContext, VectorStoreIndex, Settings
+from llama_index.core.ingestion import run_transformations
 from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.llms.openai import OpenAI
 
@@ -48,15 +50,12 @@ def build_indexing_pipeline(
 def build_qdrant_index(
     client,
     collection: str,
-    nodes,
+    docs: list[Document],
     metadata_handlers: Tuple,
     embedding_model: str = "text-embedding-3-small",
     llm_model: str = "gpt-5-nano",
 ) -> VectorStoreIndex:
     node_parser, metadata_extractors, metadata_injector = metadata_handlers
-
-    parsed_nodes = node_parser.get_nodes_from_documents(nodes)
-    parsed_nodes = metadata_injector(parsed_nodes)
 
     previous_embed_model = Settings.embed_model
     previous_llm = Settings.llm
@@ -64,16 +63,35 @@ def build_qdrant_index(
     Settings.llm = OpenAI(model=llm_model)
 
     vector_store = QdrantVectorStore(client=client, collection_name=collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    persist_dir = get_collection_persist_dir(collection)
+    persist_dir.mkdir(parents=True, exist_ok=True)
+    storage_context = StorageContext.from_defaults(
+        vector_store=vector_store,
+        persist_dir=str(persist_dir),
+    )
 
     try:
-        index = VectorStoreIndex.from_documents(
-            parsed_nodes,
-            storage_context=storage_context,
-            transformations=metadata_extractors,
+        transformed_nodes = run_transformations(
+            docs,
+            transformations=[node_parser, *metadata_extractors],
             show_progress=True,
         )
+        transformed_nodes = metadata_injector(transformed_nodes)
+
+        index = VectorStoreIndex(
+            transformed_nodes,
+            storage_context=storage_context,
+            # Force keeping full node graph in docstore so BM25/AutoMerging can run at query time.
+            store_nodes_override=True,
+            show_progress=True,
+        )
+        storage_context.persist(persist_dir=str(persist_dir))
     finally:
         Settings.embed_model = previous_embed_model
         Settings.llm = previous_llm
     return index
+
+
+def get_collection_persist_dir(collection: str) -> Path:
+    backend_root = Path(__file__).resolve().parents[1]
+    return backend_root / ".index_store" / collection

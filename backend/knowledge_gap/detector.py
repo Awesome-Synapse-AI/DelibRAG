@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -44,11 +45,22 @@ class GapDetector:
 
         # Condition A: No relevant docs.
         max_score = max((self._node_score(n) for n in nodes), default=0.0)
-        if not nodes or max_score < self.retrieval_score_threshold:
+        raw_vector_max = float(state.get("raw_vector_max_score", 0.0) or 0.0)
+        # Use a composite score because fused/auto-merged scores and raw vector scores
+        # live on different scales depending on retriever mode.
+        relevance_score = max(max_score, raw_vector_max)
+
+        effective_threshold = float(self.retrieval_score_threshold or 0.0)
+        if not nodes or relevance_score < effective_threshold:
             return self._build_gap_ticket(
                 state,
                 gap_type="missing_knowledge",
-                description=f"No relevant documents found for: {query}",
+                description=(
+                    f"No relevant documents found for: {query} "
+                    f"(relevance_score={relevance_score:.4f}, "
+                    f"fusion_max={max_score:.4f}, vector_max={raw_vector_max:.4f}, "
+                    f"threshold={effective_threshold:.4f})"
+                ),
             )
 
         # Condition B: Contradiction detection.
@@ -62,7 +74,8 @@ class GapDetector:
             )
 
         # Condition C: Low confidence on in-scope query.
-        in_scope = bool(state.get("in_scope"))
+        scope_result = state.get("scope_result") or {}
+        in_scope = bool(state.get("in_scope", scope_result.get("in_scope", False)))
         confidence = float(state.get("confidence", 1.0))
         if in_scope and confidence < self.confidence_threshold:
             return self._build_gap_ticket(
@@ -77,7 +90,10 @@ class GapDetector:
         return None
 
     async def _detect_contradiction(self, nodes: List[Any], query: str) -> Optional[Dict[str, Any]]:
-        top_nodes = nodes[:5]
+        top_nodes = self._select_contradiction_candidates(nodes, query, limit=5)
+        if len(top_nodes) < 2:
+            return None
+
         prompt = CONTRADICTION_DETECTION_PROMPT.format(
             query=query,
             docs="\n\n".join(self._node_text(n) for n in top_nodes),
@@ -85,8 +101,12 @@ class GapDetector:
         result = await self._llm.acomplete(prompt)
         parsed = self._parse_contradiction_result(getattr(result, "text", str(result)))
         if parsed.get("has_contradiction"):
-            if not parsed.get("sources"):
-                parsed["sources"] = [self._node_source(n) for n in top_nodes]
+            valid_sources = {self._node_source(n) for n in top_nodes}
+            normalized_sources = self._normalize_sources(parsed.get("sources", []), valid_sources)
+            if len(normalized_sources) < 2:
+                # Ignore weak/placeholder outputs like ["source_1", "source_2"].
+                return None
+            parsed["sources"] = normalized_sources
             return parsed
         return None
 
@@ -113,6 +133,79 @@ class GapDetector:
         if normalized in {"management", "manager"}:
             return "manager-knowledge-owner"
         return f"{normalized}-knowledge-owner"
+
+    def _select_contradiction_candidates(self, nodes: List[Any], query: str, limit: int = 5) -> List[Any]:
+        query_terms = self._query_keywords(query)
+        selected: List[Any] = []
+        seen_sources: set[str] = set()
+
+        for node in nodes:
+            source = self._node_source(node)
+            if source in seen_sources:
+                continue
+            node_terms = self._query_keywords(self._node_text(node))
+            overlap = len(query_terms & node_terms)
+            if overlap < 2:
+                continue
+            selected.append(node)
+            seen_sources.add(source)
+            if len(selected) >= limit:
+                break
+
+        return selected
+
+    @staticmethod
+    def _keyword_coverage(query_terms: set[str], text: str) -> float:
+        if not query_terms:
+            return 0.0
+        text_terms = GapDetector._query_keywords(text)
+        return len(query_terms & text_terms) / max(len(query_terms), 1)
+
+    @staticmethod
+    def _normalize_sources(raw_sources: List[Any], valid_sources: set[str]) -> List[str]:
+        normalized: List[str] = []
+        for src in raw_sources:
+            candidate = str(src)
+            if candidate in valid_sources:
+                normalized.append(candidate)
+        return list(dict.fromkeys(normalized))
+
+    @staticmethod
+    def _query_keywords(text: str) -> set[str]:
+        tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]+", text.lower())
+        stopwords = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "about",
+            "tell",
+            "what",
+            "when",
+            "where",
+            "who",
+            "why",
+            "how",
+            "your",
+            "have",
+            "has",
+            "had",
+            "are",
+            "was",
+            "were",
+            "will",
+            "would",
+            "should",
+            "can",
+            "could",
+            "not",
+            "any",
+            "all",
+        }
+        return {tok for tok in tokens if len(tok) >= 3 and tok not in stopwords}
 
     @staticmethod
     def _node_score(node: Any) -> float:

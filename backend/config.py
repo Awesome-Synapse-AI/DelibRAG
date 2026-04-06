@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_exp_minutes: int = 30
     refresh_token_exp_days: int = 7
-    qdrant_host: str = "localhost"
+    qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
     clinical_collection_name: str = "clinical-info"
     manager_collection_name: str = "manager-info"
@@ -25,10 +25,11 @@ class Settings(BaseSettings):
     scope_manifest_path: str = "scope_manifest.json"
     lda_model_path: str = "lda_model.pkl"
     lda_vectorizer_path: str = "lda_vectorizer.pkl"
-    gap_retrieval_score_threshold: float = 0.35
+    gap_retrieval_score_threshold: float = 0.2
     gap_confidence_threshold: float = 0.45
-    mongo_uri: str = "mongodb://localhost:27017"
+    mongo_uri: str = "mongodb://mongo:27017"
     mongo_db_name: str = "delibrag"
+    openai_api_key: str = ""
 
     _backend_dir = Path(__file__).resolve().parent
     _env_paths = (

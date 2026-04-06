@@ -1,6 +1,7 @@
 # other folders
 scripts/lda_domains
 infra/qdrant
+backend/.index_store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -2,10 +2,11 @@ from typing import Optional
 
 import asyncio
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from qdrant_client import QdrantClient
+from qdrant_client import AsyncQdrantClient, QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
 
@@ -15,6 +16,7 @@ from agent.memory import delete_session as delete_session_store, list_sessions a
 from agent.nodes import (
     answer_stream,
     build_prompt,
+    drop_deprecated_nodes,
     extract_citations,
     get_retriever_for_user,
     rerank_by_trust_score,
@@ -24,8 +26,10 @@ from agent.stakes_classifier import classify_stakes
 from agent.confidence_gate import confidence_gate
 from agent.memory import load_session_history, save_to_session
 from retrieval.context_builder import build_context_string
+from retrieval.entity_filter import filter_nodes_by_query_entities
 from retrieval.scope_classifier import ScopeClassifier, evaluate_scope_result
 from config import get_settings
+from indexing.pipeline import get_collection_persist_dir
 
 
 router = APIRouter()
@@ -34,6 +38,53 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     session_id: str
     query: str
+
+
+def _parse_semver(version: str) -> tuple[int, int, int]:
+    cleaned = version.split("-")[0]
+    parts = cleaned.split(".")
+    nums = []
+    for p in parts[:3]:
+        try:
+            nums.append(int(p))
+        except ValueError:
+            nums.append(0)
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums)
+
+
+def _ensure_qdrant_ready(client: QdrantClient, collection: str):
+    try:
+        if not client.collection_exists(collection):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Qdrant collection '{collection}' not found. Run indexing first.",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"Cannot reach Qdrant or validate collection '{collection}': {exc}",
+        )
+
+    try:
+        info = client.info()
+        version = getattr(info, "version", None)
+        if version is None and isinstance(info, dict):
+            version = info.get("version")
+        if version and _parse_semver(str(version)) < (1, 10, 0):
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "Qdrant server version is too old for this backend. "
+                "Use Qdrant >= 1.10 (recommended 1.17.x) or downgrade qdrant-client/llama-index packages.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # If version probe fails, collection check above still guarantees basic connectivity.
+        pass
 
 
 def _collection_for_department(department: Optional[str]) -> str:
@@ -49,14 +100,34 @@ def _collection_for_department(department: Optional[str]) -> str:
 @router.post("/chat")
 async def chat(payload: ChatRequest, user=Depends(get_current_user)):
     settings = get_settings()
+    if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "OPENAI_API_KEY is not set in backend container environment",
+        )
     client = QdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         check_compatibility=False,
     )
+    aclient = AsyncQdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+        check_compatibility=False,
+    )
     collection = _collection_for_department(user.department)
-    vector_store = QdrantVectorStore(client=client, collection_name=collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    _ensure_qdrant_ready(client, collection)
+    persist_dir = get_collection_persist_dir(collection)
+    if not persist_dir.exists():
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Local index storage missing for collection '{collection}'. Run scripts/run_llamaindex.py first.",
+        )
+    vector_store = QdrantVectorStore(client=client, aclient=aclient, collection_name=collection)
+    storage_context = StorageContext.from_defaults(
+        vector_store=vector_store,
+        persist_dir=str(persist_dir),
+    )
     index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
 
     graph = build_agent_graph()
@@ -82,14 +153,34 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
 @router.get("/chat/stream")
 async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
     settings = get_settings()
+    if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "OPENAI_API_KEY is not set in backend container environment",
+        )
     client = QdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         check_compatibility=False,
     )
+    aclient = AsyncQdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+        check_compatibility=False,
+    )
     collection = _collection_for_department(user.department)
-    vector_store = QdrantVectorStore(client=client, collection_name=collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    _ensure_qdrant_ready(client, collection)
+    persist_dir = get_collection_persist_dir(collection)
+    if not persist_dir.exists():
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Local index storage missing for collection '{collection}'. Run scripts/run_llamaindex.py first.",
+        )
+    vector_store = QdrantVectorStore(client=client, aclient=aclient, collection_name=collection)
+    storage_context = StorageContext.from_defaults(
+        vector_store=vector_store,
+        persist_dir=str(persist_dir),
+    )
     index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_context)
 
     state: AgentState = {
@@ -104,7 +195,7 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
 
     async def event_stream():
         state["messages"] = await load_session_history(state["session_id"])
-        scope = ScopeClassifier().classify(state["query"])
+        scope = ScopeClassifier(department=state.get("user_department")).classify(state["query"])
         state["scope_result"] = scope
         scope_decision = evaluate_scope_result(scope, state.get("retrieved_nodes"))
         if scope_decision.get("action") == "out_of_scope":
@@ -117,8 +208,11 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
         state["stakes_level"] = classify_stakes(state["query"], state.get("user_role"))
         retriever = get_retriever_for_user(state)
         nodes = await retriever.aretrieve(state["query"])
+        nodes, entities = await filter_nodes_by_query_entities(state["query"], nodes)
+        nodes = drop_deprecated_nodes(nodes)
         nodes = rerank_by_trust_score(nodes)
         state["retrieved_nodes"] = nodes
+        state["query_entities"] = entities
         state["context"] = build_context_string(nodes)
 
         prompt = build_prompt(state)

@@ -19,5 +19,6 @@ class AgentState(TypedDict, total=False):
     citations: Optional[list[str]]
     audit_trail: Optional[dict]
     gap_ticket_id: Optional[str]
+    query_entities: Optional[list[str]]
     index: Optional[Any]
     storage_context: Optional[Any]

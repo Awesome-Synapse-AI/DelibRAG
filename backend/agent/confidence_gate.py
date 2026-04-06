@@ -7,7 +7,6 @@ from llama_index.llms.openai import OpenAI
 
 CONFIDENCE_THRESHOLDS = {
     "low": 0.0,
-    "medium": 0.55,
     "high": 0.75,
 }
 
@@ -36,7 +35,7 @@ class ConfidenceGate:
 
     async def evaluate(self, state: dict) -> dict:
         stakes = state.get("stakes_level", "medium")
-        threshold = CONFIDENCE_THRESHOLDS.get(stakes, 0.55)
+        threshold = CONFIDENCE_THRESHOLDS.get(stakes, 0.75)
 
         if stakes == "low":
             state["confidence"] = 1.0

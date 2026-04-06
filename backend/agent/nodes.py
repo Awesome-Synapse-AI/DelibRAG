@@ -94,27 +94,13 @@ async def stakes_classify_node(state: AgentState) -> AgentState:
 
 
 async def retrieve_node(state: AgentState) -> AgentState:
-    stakes = state.get("stakes_level", "medium")
+    stakes = state.get("stakes_level", "high")
     if stakes == "low":
         return await low_stakes_retrieve_node(state)
-    if stakes == "high":
-        return await high_stakes_retrieve_node(state)
-    return await medium_stakes_retrieve_node(state)
+    return await high_stakes_retrieve_node(state)
 
 
 async def low_stakes_retrieve_node(state: AgentState) -> AgentState:
-    retriever = get_retriever_for_user(state)
-    nodes = await retriever.aretrieve(state["query"])
-    nodes, entities = await filter_nodes_by_query_entities(state["query"], nodes)
-    nodes = rerank_by_trust_score(drop_deprecated_nodes(nodes))
-    state["retrieved_nodes"] = nodes
-    state["context"] = build_context_string(nodes)
-    state["query_entities"] = entities
-    state["raw_vector_max_score"] = await _raw_vector_max_score(state, state["query"])
-    return state
-
-
-async def medium_stakes_retrieve_node(state: AgentState) -> AgentState:
     retriever = get_retriever_for_user(state)
     nodes = await retriever.aretrieve(state["query"])
     nodes, entities = await filter_nodes_by_query_entities(state["query"], nodes)
@@ -203,6 +189,10 @@ async def out_of_scope_response_node(state: AgentState) -> AgentState:
 
 
 async def gap_detect_node(state: AgentState) -> AgentState:
+    # Preserve first detected gap to keep deterministic precedence:
+    # missing_knowledge/contradiction (pre-answer) before low_confidence (post-answer).
+    if state.get("gap_ticket_id"):
+        return state
     detector = GapDetector()
     gap_ticket = await detector.check_gap(state)
     if gap_ticket:

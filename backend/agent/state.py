@@ -17,6 +17,7 @@ class AgentState(TypedDict, total=False):
     answer: Optional[str]
     confidence: Optional[float]
     citations: Optional[list[str]]
+    citation_details: Optional[list[dict]]
     audit_trail: Optional[dict]
     gap_ticket_id: Optional[str]
     query_entities: Optional[list[str]]

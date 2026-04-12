@@ -122,7 +122,7 @@ def _serialize_ticket(ticket: GapTicket) -> Dict[str, Any]:
 async def get_gaps(
     status_filter: str = Query(default="open", alias="status"),
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_role(UserRole.engineer, UserRole.clinician, UserRole.manager, UserRole.admin)),
+    _user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
 ):
     tickets = await list_gap_tickets(db, status=status_filter)
     return [_serialize_ticket(t) for t in tickets]
@@ -222,7 +222,7 @@ async def check_gap_detector(
 async def get_gap(
     ticket_id: str,
     db: AsyncSession = Depends(get_db),
-    _user=Depends(require_role(UserRole.engineer, UserRole.clinician, UserRole.manager, UserRole.admin)),
+    _user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
 ):
     ticket = await get_gap_ticket(db, ticket_id)
     if not ticket:
@@ -234,7 +234,7 @@ async def get_gap(
 async def create_gap(
     payload: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role(UserRole.engineer, UserRole.clinician, UserRole.manager, UserRole.admin)),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
 ):
     payload.setdefault("user_id", str(user.id))
     payload.setdefault("user_role", user.role.value if hasattr(user.role, "value") else str(user.role))
@@ -265,7 +265,7 @@ async def resolve_gap(
     ticket_id: str,
     payload: GapTicketResolvePayload,
     db: AsyncSession = Depends(get_db),
-    user=Depends(require_role(UserRole.engineer, UserRole.clinician, UserRole.manager, UserRole.admin)),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
 ):
     try:
         ticket = await ingest_resolution(ticket_id=ticket_id, resolution=payload, user=user, db=db)

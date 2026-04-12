@@ -11,8 +11,6 @@ from db.postgres import Base
 
 
 class UserRole(str, enum.Enum):
-    viewer = "viewer"
-    engineer = "engineer"
     clinician = "clinician"
     manager = "manager"
     admin = "admin"
@@ -26,7 +24,7 @@ class User(Base):
     email = Column(String(255), nullable=False, unique=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=True)
-    role = Column(String(50), nullable=False, default=UserRole.viewer.value)
+    role = Column(String(50), nullable=False, default=UserRole.clinician.value)
     department = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     refresh_token_hash = Column(String(255), nullable=True)

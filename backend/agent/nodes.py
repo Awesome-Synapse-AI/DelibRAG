@@ -56,6 +56,24 @@ def extract_citations(nodes: List[Any]) -> List[str]:
     return citations
 
 
+def extract_citation_details(nodes: List[Any]) -> List[dict]:
+    details: List[dict] = []
+    for n in nodes:
+        meta = _node_metadata(n)
+        source = meta.get("doc_id") or meta.get("source_id") or meta.get("source")
+        if not source:
+            continue
+        details.append(
+            {
+                "source": str(source),
+                "title": str(meta.get("title") or source),
+                "section": str(meta.get("section") or meta.get("chunk_label") or "N/A"),
+                "trust_score": float(meta.get("source_trust_score", 1.0)),
+            }
+        )
+    return details
+
+
 def build_prompt(state: AgentState) -> str:
     history = state.get("messages") or []
     rendered = []
@@ -164,7 +182,9 @@ async def answer_generate_node(state: AgentState) -> AgentState:
     prompt = build_prompt(state)
     response = await llm.acomplete(prompt)
     state["answer"] = getattr(response, "text", str(response))
-    state["citations"] = extract_citations(state.get("retrieved_nodes") or [])
+    nodes = state.get("retrieved_nodes") or []
+    state["citations"] = extract_citations(nodes)
+    state["citation_details"] = extract_citation_details(nodes)
     return state
 
 

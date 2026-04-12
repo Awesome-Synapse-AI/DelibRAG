@@ -70,3 +70,20 @@ ALTER TABLE routing_preferences ADD COLUMN IF NOT EXISTS avoided_sources TEXT[];
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_source_trust_scores_source_id ON source_trust_scores (source_id);
 CREATE INDEX IF NOT EXISTS ix_gap_tickets_status_created ON gap_tickets (status, created_at DESC);
+
+UPDATE users
+SET role = 'clinician'
+WHERE role IN ('viewer', 'engineer');
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_users_role_allowed'
+    ) THEN
+        ALTER TABLE users
+        ADD CONSTRAINT ck_users_role_allowed
+        CHECK (role IN ('clinician', 'manager', 'admin'));
+    END IF;
+END $$;

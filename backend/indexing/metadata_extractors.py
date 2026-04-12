@@ -8,9 +8,9 @@ except ImportError:  # pragma: no cover
 
 from llama_index.core.extractors.metadata_extractors import KeywordExtractor
 
-ALLOWED_ROLES_DEFAULT = ["viewer", "clinician", "manager", "admin"]
-ALLOWED_ROLES_CLINICAL = ["viewer", "clinician", "admin"]
-ALLOWED_ROLES_MANAGER = ["viewer", "manager", "admin"]
+ALLOWED_ROLES_DEFAULT = ["clinician", "manager", "admin"]
+ALLOWED_ROLES_CLINICAL = ["clinician", "admin"]
+ALLOWED_ROLES_MANAGER = ["manager", "admin"]
 
 
 def infer_allowed_roles(node, department: Optional[str] = None) -> List[str]:

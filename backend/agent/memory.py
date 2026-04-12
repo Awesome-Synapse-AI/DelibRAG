@@ -25,7 +25,11 @@ async def save_to_session(session_id: str, user_id: str, turn: dict):
         turn["timestamp"] = turn.get("timestamp") or datetime.utcnow()
         await db.sessions.update_one(
             {"session_id": session_id},
-            {"$push": {"messages": turn}, "$set": {"user_id": user_id, "last_active": datetime.utcnow()}},
+            {
+                "$push": {"messages": turn},
+                "$set": {"user_id": user_id, "last_active": datetime.utcnow()},
+                "$setOnInsert": {"session_id": session_id, "created_at": datetime.utcnow()},
+            },
             upsert=True,
         )
     except PyMongoError as exc:
@@ -61,3 +65,21 @@ async def delete_session(session_id: str, user_id: str) -> bool:
     except PyMongoError as exc:
         logger.warning("Mongo unavailable in delete_session(session_id=%s): %s", session_id, exc)
         return False
+
+
+async def get_session(session_id: str, user_id: str) -> dict | None:
+    try:
+        db = get_mongo_db()
+        doc = await db.sessions.find_one({"session_id": session_id, "user_id": user_id})
+        if not doc:
+            return None
+        return {
+            "session_id": doc.get("session_id"),
+            "user_id": doc.get("user_id"),
+            "created_at": doc.get("created_at"),
+            "last_active": doc.get("last_active"),
+            "messages": doc.get("messages", []),
+        }
+    except PyMongoError as exc:
+        logger.warning("Mongo unavailable in get_session(session_id=%s): %s", session_id, exc)
+        return None

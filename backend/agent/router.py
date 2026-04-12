@@ -2,7 +2,7 @@ from typing import Optional
 
 import json
 import os
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import AsyncQdrantClient, QdrantClient
@@ -11,7 +11,11 @@ from llama_index.core import StorageContext, VectorStoreIndex
 
 from auth.dependencies import get_current_user
 from agent.graph import build_agent_graph
-from agent.memory import delete_session as delete_session_store, list_sessions as list_sessions_store
+from agent.memory import (
+    delete_session as delete_session_store,
+    get_session as get_session_store,
+    list_sessions as list_sessions_store,
+)
 from agent.nodes import high_stakes_retrieve_node, low_stakes_retrieve_node
 from agent.state import AgentState
 from agent.stakes_classifier import StakesClassifier
@@ -98,6 +102,15 @@ def _department_for_role(role: str) -> str:
     return "general"
 
 
+def _effective_department(user) -> str:
+    raw_department = (getattr(user, "department", None) or "").strip().lower()
+    if raw_department and raw_department not in {"general", "string", "default"}:
+        return raw_department
+    role_value = getattr(user, "role", "")
+    role_text = role_value.value if hasattr(role_value, "value") else str(role_value)
+    return _department_for_role(role_text)
+
+
 def _build_index_for_department(department: str):
     settings = get_settings()
     client = QdrantClient(
@@ -135,7 +148,8 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "OPENAI_API_KEY is not set in backend container environment",
         )
-    _collection, index, storage_context = _build_index_for_department(user.department)
+    department = _effective_department(user)
+    _collection, index, storage_context = _build_index_for_department(department)
 
     graph = build_agent_graph()
     state: AgentState = {
@@ -143,7 +157,7 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
         "query": payload.query,
         "user_id": str(user.id),
         "user_role": user.role.value if hasattr(user.role, "value") else str(user.role),
-        "user_department": user.department,
+        "user_department": department,
         "index": index,
         "storage_context": storage_context,
     }
@@ -151,6 +165,7 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
     return {
         "answer": result.get("answer"),
         "citations": result.get("citations"),
+        "citation_details": result.get("citation_details"),
         "confidence": result.get("confidence"),
         "stakes_level": result.get("stakes_level"),
         "gap_ticket_id": result.get("gap_ticket_id"),
@@ -220,21 +235,26 @@ async def chat_dev_stakes(payload: ChatDevRequest):
 
 
 @router.get("/chat/stream")
-async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
+async def chat_stream(
+    session_id: str = Query(...),
+    query: str = Query(...),
+    user=Depends(get_current_user),
+):
     settings = get_settings()
     if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "OPENAI_API_KEY is not set in backend container environment",
         )
-    _collection, index, storage_context = _build_index_for_department(user.department)
+    department = _effective_department(user)
+    _collection, index, storage_context = _build_index_for_department(department)
 
     state: AgentState = {
-        "session_id": payload.session_id,
-        "query": payload.query,
+        "session_id": session_id,
+        "query": query,
         "user_id": str(user.id),
         "user_role": user.role.value if hasattr(user.role, "value") else str(user.role),
-        "user_department": user.department,
+        "user_department": department,
         "index": index,
         "storage_context": storage_context,
     }
@@ -252,6 +272,7 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
                     "type": "final",
                     "answer": answer,
                     "citations": result.get("citations"),
+                    "citation_details": result.get("citation_details"),
                     "confidence": result.get("confidence"),
                     "stakes_level": result.get("stakes_level"),
                     "gap_ticket_id": result.get("gap_ticket_id"),
@@ -268,6 +289,14 @@ async def chat_stream(payload: ChatRequest, user=Depends(get_current_user)):
 @router.get("/sessions")
 async def list_sessions(user=Depends(get_current_user)):
     return await list_sessions_store(str(user.id))
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str, user=Depends(get_current_user)):
+    session = await get_session_store(session_id, str(user.id))
+    if not session:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+    return session
 
 
 @router.delete("/sessions/{session_id}")

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     lda_vectorizer_path: str = "lda_vectorizer.pkl"
     gap_retrieval_score_threshold: float = 0.2
     gap_confidence_threshold: float = 0.45
+    confidence_threshold_low: float = 0.0
+    confidence_threshold_high: float = 0.75
     mongo_uri: str = "mongodb://mongo:27017"
     mongo_db_name: str = "delibrag"
     openai_api_key: str = ""

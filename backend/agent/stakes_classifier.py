@@ -18,7 +18,8 @@ Guidelines:
 - HIGH if wrong answer could cause security, legal, compliance, production, customer-data,
   major financial/operational impact, or role-sensitive executive decision risk.
 - LOW for routine informational/internal guidance with limited downside.
-- If uncertain, choose HIGH.
+- Do NOT choose HIGH only because role is manager/admin; query risk must justify HIGH.
+- If uncertain and no explicit high-risk signal, choose LOW.
 """
 
 

@@ -16,7 +16,22 @@ from agent.memory import (
     get_session as get_session_store,
     list_sessions as list_sessions_store,
 )
-from agent.nodes import high_stakes_retrieve_node, low_stakes_retrieve_node
+from agent.nodes import (
+    answer_stream,
+    audit_log_node,
+    build_prompt,
+    confidence_check_node,
+    extract_citation_details,
+    extract_citations,
+    gap_detect_node,
+    high_stakes_retrieve_node,
+    load_history_node,
+    low_stakes_retrieve_node,
+    memory_save_node,
+    out_of_scope_response_node,
+    scope_check_node,
+    stakes_classify_node,
+)
 from agent.state import AgentState
 from agent.stakes_classifier import StakesClassifier
 from config import get_settings
@@ -260,24 +275,62 @@ async def chat_stream(
     }
 
     async def event_stream():
-        graph = build_agent_graph()
-        result = await graph.ainvoke(state)
-        answer = result.get("answer") or ""
-        # Keep SSE shape; emit one chunk + final envelope.
-        yield f"data: {json.dumps({'type':'chunk','content':answer})}\n\n"
+        working_state: AgentState = dict(state)
+
+        working_state = await load_history_node(working_state)
+        working_state = await scope_check_node(working_state)
+        scope_in = bool((working_state.get("scope_result") or {}).get("in_scope"))
+
+        if not scope_in:
+            working_state = await out_of_scope_response_node(working_state)
+        else:
+            working_state = await stakes_classify_node(working_state)
+            stakes = working_state.get("stakes_level", "high")
+            if stakes == "low":
+                working_state = await low_stakes_retrieve_node(working_state)
+            else:
+                working_state = await high_stakes_retrieve_node(working_state)
+            working_state = await gap_detect_node(working_state)
+
+            prompt = build_prompt(working_state)
+            streamed_text = ""
+            async for piece in answer_stream(prompt):
+                if not piece:
+                    continue
+                # Handle both cumulative and token-delta stream styles.
+                delta = piece
+                if piece.startswith(streamed_text):
+                    delta = piece[len(streamed_text) :]
+                    streamed_text = piece
+                else:
+                    streamed_text += piece
+                if delta:
+                    yield f"data: {json.dumps({'type':'chunk','content':delta})}\n\n"
+
+            working_state["answer"] = streamed_text
+            nodes = working_state.get("retrieved_nodes") or []
+            working_state["citations"] = extract_citations(nodes)
+            working_state["citation_details"] = extract_citation_details(nodes)
+            working_state = await confidence_check_node(working_state)
+            working_state = await gap_detect_node(working_state)
+
+        working_state = await audit_log_node(working_state)
+        working_state = await memory_save_node(working_state)
+
+        answer = working_state.get("answer") or ""
         yield (
             "data: "
             + json.dumps(
                 {
                     "type": "final",
                     "answer": answer,
-                    "citations": result.get("citations"),
-                    "citation_details": result.get("citation_details"),
-                    "confidence": result.get("confidence"),
-                    "stakes_level": result.get("stakes_level"),
-                    "gap_ticket_id": result.get("gap_ticket_id"),
-                    "requires_human_review": result.get("requires_human_review"),
-                    "query_id": result.get("query_id"),
+                    "citations": working_state.get("citations"),
+                    "citation_details": working_state.get("citation_details"),
+                    "confidence": working_state.get("confidence"),
+                    "stakes_level": working_state.get("stakes_level"),
+                    "gap_ticket_id": working_state.get("gap_ticket_id"),
+                    "requires_human_review": working_state.get("requires_human_review"),
+                    "query_id": working_state.get("query_id"),
                 }
             )
             + "\n\n"

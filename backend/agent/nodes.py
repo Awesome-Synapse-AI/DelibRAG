@@ -173,12 +173,12 @@ async def high_stakes_retrieve_node(state: AgentState) -> AgentState:
     return state
 
 
-def get_llm():
-    return OpenAI(model="gpt-5-nano")
+def get_llm(max_tokens: int = 2048):
+    return OpenAI(model="gpt-5-nano", max_tokens=max_tokens)
 
 
 async def answer_generate_node(state: AgentState) -> AgentState:
-    llm = get_llm()
+    llm = get_llm(max_tokens=2048)
     prompt = build_prompt(state)
     response = await llm.acomplete(prompt)
     state["answer"] = getattr(response, "text", str(response))
@@ -189,9 +189,17 @@ async def answer_generate_node(state: AgentState) -> AgentState:
 
 
 async def answer_stream(prompt: str):
-    llm = get_llm()
-    async for chunk in llm.astream_complete(prompt):
-        yield getattr(chunk, "text", str(chunk))
+    llm = get_llm(max_tokens=2048)
+    stream = await llm.astream_complete(prompt)
+    async for chunk in stream:
+        # Prefer token delta for true incremental streaming.
+        delta = getattr(chunk, "delta", None)
+        if isinstance(delta, str) and delta:
+            yield delta
+            continue
+        text = getattr(chunk, "text", None)
+        if isinstance(text, str) and text:
+            yield text
 
 
 async def confidence_check_node(state: AgentState) -> AgentState:
@@ -282,7 +290,7 @@ async def scope_gate_node(state: AgentState) -> AgentState:
 
 
 async def _rephrase_query(query: str, angle: str) -> str:
-    llm = get_llm()
+    llm = get_llm(max_tokens=128)
     prompt = (
         f"Rewrite this query from a {angle} perspective while preserving intent. "
         "Return one sentence only.\n\n"

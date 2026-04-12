@@ -12,7 +12,7 @@ services:
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
   backend:
-    build: ./backend
+    image: delibrag-backend:py311
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     env_file:
       - .env
@@ -33,6 +33,15 @@ services:
       - db
       - qdrant
       - mongo
+
+  frontend:
+    build: ./frontend
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
 
   qdrant:
     image: qdrant/qdrant:v1.17.1

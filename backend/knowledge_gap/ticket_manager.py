@@ -66,7 +66,10 @@ def _maybe_uuid(value: Optional[str]):
         return None
     if isinstance(value, uuid.UUID):
         return value
-    return uuid.UUID(str(value))
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 async def create_gap_ticket(db: AsyncSession, payload: Dict[str, Any]) -> GapTicket:

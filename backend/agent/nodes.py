@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from typing import Any, List
+import logging
 
 from llama_index.llms.openai import OpenAI
 
@@ -10,10 +11,13 @@ from agent.stakes_classifier import StakesClassifier
 from agent.state import AgentState
 from audit.trail import write_audit_entry
 from knowledge_gap.detector import GapDetector
+from knowledge_gap.ticket_manager import create_gap_ticket
 from retrieval.context_builder import build_context_string
 from retrieval.entity_filter import filter_nodes_by_query_entities
 from retrieval.hybrid_retriever import build_hybrid_retriever, build_vector_retriever
 from retrieval.scope_classifier import ScopeClassifier, evaluate_scope_result
+
+logger = logging.getLogger(__name__)
 
 
 def get_retriever_for_user(state: AgentState):
@@ -229,6 +233,24 @@ async def gap_detect_node(state: AgentState) -> AgentState:
     return state
 
 
+async def gap_ticket_create_node(state: AgentState) -> AgentState:
+    if state.get("gap_ticket_id") != "pending":
+        return state
+    payload = state.get("gap_ticket_preview")
+    db = state.get("db")
+    if not isinstance(payload, dict) or db is None:
+        return state
+
+    try:
+        ticket = await create_gap_ticket(db, payload)
+    except Exception:
+        logger.exception("Failed to create knowledge-gap ticket (query=%s)", state.get("query"))
+        return state
+
+    state["gap_ticket_id"] = str(ticket.id)
+    return state
+
+
 async def audit_log_node(state: AgentState) -> AgentState:
     if state.get("stakes_level") != "high":
         return state
@@ -271,6 +293,8 @@ async def memory_save_node(state: AgentState) -> AgentState:
             "citations": state.get("citations"),
             "confidence": state.get("confidence"),
             "stakes_level": state.get("stakes_level"),
+            "gap_ticket_id": state.get("gap_ticket_id"),
+            "requires_human_review": state.get("requires_human_review"),
         },
     )
     return state

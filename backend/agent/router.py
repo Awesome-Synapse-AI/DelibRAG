@@ -5,6 +5,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
@@ -24,6 +25,7 @@ from agent.nodes import (
     extract_citation_details,
     extract_citations,
     gap_detect_node,
+    gap_ticket_create_node,
     high_stakes_retrieve_node,
     load_history_node,
     low_stakes_retrieve_node,
@@ -35,6 +37,7 @@ from agent.nodes import (
 from agent.state import AgentState
 from agent.stakes_classifier import StakesClassifier
 from config import get_settings
+from db.postgres import get_db
 from indexing.pipeline import get_collection_persist_dir
 
 
@@ -156,7 +159,7 @@ def _build_index_for_department(department: str):
 
 
 @router.post("/chat")
-async def chat(payload: ChatRequest, user=Depends(get_current_user)):
+async def chat(payload: ChatRequest, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
     if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
         raise HTTPException(
@@ -175,6 +178,7 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user)):
         "user_department": department,
         "index": index,
         "storage_context": storage_context,
+        "db": db,
     }
     result = await graph.ainvoke(state)
     return {
@@ -254,6 +258,7 @@ async def chat_stream(
     session_id: str = Query(...),
     query: str = Query(...),
     user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     settings = get_settings()
     if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
@@ -276,6 +281,7 @@ async def chat_stream(
 
     async def event_stream():
         working_state: AgentState = dict(state)
+        working_state["db"] = db
 
         working_state = await load_history_node(working_state)
         working_state = await scope_check_node(working_state)
@@ -313,6 +319,7 @@ async def chat_stream(
             working_state["citation_details"] = extract_citation_details(nodes)
             working_state = await confidence_check_node(working_state)
             working_state = await gap_detect_node(working_state)
+            working_state = await gap_ticket_create_node(working_state)
 
         working_state = await audit_log_node(working_state)
         working_state = await memory_save_node(working_state)

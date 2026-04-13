@@ -19,6 +19,8 @@ dist/
 downloads/
 eggs/
 .eggs/
+# NOTE: This repo also has `frontend/lib/` as real source code.
+# Keep ignoring generic `lib/` folders, but do not ignore the frontend source tree.
 lib/
 lib64/
 parts/
@@ -210,3 +212,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Frontend source (override generic `lib/` ignore above)
+!frontend/lib/
+!frontend/lib/**

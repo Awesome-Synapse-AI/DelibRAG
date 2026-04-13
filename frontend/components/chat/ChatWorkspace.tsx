@@ -10,6 +10,7 @@ import type { ChatResponse, SessionDetail, SessionMessage, SessionSummary } from
 type UiMessage = SessionMessage & {
   id: string;
   requires_human_review?: boolean;
+  gap_ticket_id?: string | null;
   out_of_scope?: boolean;
   citation_details?: Array<{
     source: string;
@@ -257,10 +258,11 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
       id: `a-${Date.now()}`,
       role: "assistant",
       content: "",
-        citations: [],
-        citation_details: [],
-        confidence: null,
+      citations: [],
+      citation_details: [],
+      confidence: null,
       stakes_level: null,
+      gap_ticket_id: null,
     };
 
     setMessagesBySession((prev) => ({
@@ -284,6 +286,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
         citation_details: finalResponse.citation_details ?? [],
         confidence: finalResponse.confidence ?? null,
         stakes_level: finalResponse.stakes_level ?? null,
+        gap_ticket_id: finalResponse.gap_ticket_id ?? null,
         requires_human_review: finalResponse.requires_human_review,
         out_of_scope: (finalResponse.answer ?? "").toLowerCase().includes(OUT_OF_SCOPE_TEXT),
       }));
@@ -414,6 +417,12 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
                 {message.role === "assistant" && message.requires_human_review && (
                   <div className="banner banner-warning" style={{ marginTop: 8 }}>
                     Confidence below threshold. Human review is recommended.
+                  </div>
+                )}
+
+                {message.role === "assistant" && message.gap_ticket_id && message.gap_ticket_id !== "pending" && (
+                  <div className="banner banner-warning" style={{ marginTop: 8 }}>
+                    Knowledge-gap ticket submitted: <strong>{message.gap_ticket_id.slice(0, 8)}</strong>
                   </div>
                 )}
 

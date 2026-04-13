@@ -11,6 +11,7 @@ class AgentState(TypedDict, total=False):
     user_department: str
     query: str
     scope_result: Optional[dict]
+    in_scope: Optional[bool]
     stakes_level: Optional[str]
     retrieved_nodes: Optional[list]
     context: Optional[str]
@@ -20,6 +21,7 @@ class AgentState(TypedDict, total=False):
     citation_details: Optional[list[dict]]
     audit_trail: Optional[dict]
     gap_ticket_id: Optional[str]
+    gap_ticket_preview: Optional[dict]
     query_entities: Optional[list[str]]
     stakes_classification: Optional[dict]
     query_id: Optional[str]
@@ -28,3 +30,4 @@ class AgentState(TypedDict, total=False):
     raw_vector_max_score: Optional[float]
     index: Optional[Any]
     storage_context: Optional[Any]
+    db: Optional[Any]

@@ -16,6 +16,14 @@ export interface CurrentUser {
   created_at?: string | null;
 }
 
+export interface UserSummary {
+  id: string;
+  email: string;
+  full_name?: string | null;
+  role: UserRole;
+  department?: string | null;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant";
   content: string;

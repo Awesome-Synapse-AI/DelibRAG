@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from config import get_settings
 from auth.dependencies import oauth2_scheme
-from auth.dependencies import get_current_user
+from auth.dependencies import get_current_user, require_role
 from db.postgres import get_db
 from .models import RegisterRequest, LoginRequest, TokenResponse, User, UserRole
 from .service import (
@@ -106,3 +107,37 @@ async def me(user=Depends(get_current_user)):
         "is_active": getattr(user, "is_active", True),
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
+
+
+@router.get("/users")
+async def list_users(
+    roles: str | None = Query(default=None, description="Comma-separated roles to include"),
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_role(UserRole.manager, UserRole.admin)),
+):
+    allowed = {UserRole.manager.value, UserRole.admin.value, UserRole.clinician.value}
+    selected_roles = [UserRole.manager.value, UserRole.admin.value]
+    if roles:
+        parsed = [r.strip().lower() for r in roles.split(",") if r.strip()]
+        filtered = [r for r in parsed if r in allowed]
+        if filtered:
+            selected_roles = filtered
+
+    stmt = (
+        select(User)
+        .where(User.is_active.is_(True))
+        .where(User.role.in_(selected_roles))
+        .order_by(User.full_name.asc().nulls_last(), User.email.asc())
+    )
+    result = await db.execute(stmt)
+    users = list(result.scalars().all())
+    return [
+        {
+            "id": str(u.id),
+            "email": u.email,
+            "full_name": u.full_name,
+            "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+            "department": u.department,
+        }
+        for u in users
+    ]

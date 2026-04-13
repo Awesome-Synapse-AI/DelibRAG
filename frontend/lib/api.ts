@@ -7,6 +7,7 @@ import type {
   GapTicket,
   SessionDetail,
   SessionSummary,
+  UserSummary,
 } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -127,6 +128,11 @@ export async function login(payload: { email: string; password: string }): Promi
 
 export async function getMe(): Promise<CurrentUser> {
   return apiRequest<CurrentUser>("/auth/me");
+}
+
+export async function listUsers(roles?: string[]): Promise<UserSummary[]> {
+  const roleParam = roles?.length ? `?roles=${encodeURIComponent(roles.join(","))}` : "";
+  return apiRequest<UserSummary[]>(`/auth/users${roleParam}`);
 }
 
 export async function refreshToken(): Promise<AuthTokens | null> {

@@ -9,9 +9,10 @@ import {
   deleteGapTicket,
   getGapTicket,
   listGapTickets,
+  listUsers,
   resolveGapTicket,
 } from "@/lib/api";
-import type { GapTicket } from "@/lib/types";
+import type { GapTicket, UserSummary } from "@/lib/types";
 
 function durationHours(from?: string | null, to?: string | null) {
   if (!from || !to) {
@@ -26,17 +27,30 @@ function durationHours(from?: string | null, to?: string | null) {
 
 export default function GapDashboardPage() {
   const [tickets, setTickets] = useState<GapTicket[]>([]);
+  const [assignees, setAssignees] = useState<UserSummary[]>([]);
   const [statusFilter, setStatusFilter] = useState("open");
   const [deptFilter, setDeptFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [assignUserId, setAssignUserId] = useState("");
+  const [assignUserId, setAssignUserId] = useState<string>("");
   const [resolveAction, setResolveAction] = useState<"add_document" | "deprecate" | "update_document">("add_document");
   const [documentPath, setDocumentPath] = useState("");
   const [sourceId, setSourceId] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  async function loadAssignees() {
+    try {
+      const users = await listUsers(["manager", "admin"]);
+      setAssignees(users);
+      if (!assignUserId && users.length > 0) {
+        setAssignUserId(users[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Cannot load assignees");
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -55,6 +69,11 @@ export default function GapDashboardPage() {
   }
 
   useEffect(() => {
+    void loadAssignees();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
@@ -68,6 +87,15 @@ export default function GapDashboardPage() {
   }, [tickets, deptFilter, typeFilter]);
 
   const selectedTicket = useMemo(() => filtered.find((ticket) => ticket.id === selectedId) ?? null, [filtered, selectedId]);
+
+  const assigneeNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const u of assignees) {
+      const label = (u.full_name || u.email || u.id).toString();
+      map.set(u.id, label);
+    }
+    return map;
+  }, [assignees]);
 
   const countsByDate = useMemo(() => {
     const map = new Map<string, number>();
@@ -170,16 +198,30 @@ export default function GapDashboardPage() {
               <div>
                 <strong>Suggested Owner:</strong> {selectedTicket.suggested_owner ?? "-"}
               </div>
+              <div>
+                <strong>Assigned To:</strong>{" "}
+                {selectedTicket.assigned_to_user_id
+                  ? assigneeNameById.get(selectedTicket.assigned_to_user_id) ?? selectedTicket.assigned_to_user_id
+                  : "-"}
+              </div>
 
               <div className="card" style={{ padding: 10, background: "#f8fafc" }}>
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>Assign Ticket</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
-                  <input
-                    className="input"
-                    placeholder="assignee user id (UUID)"
-                    value={assignUserId}
-                    onChange={(e) => setAssignUserId(e.target.value)}
-                  />
+                  <select className="select" value={assignUserId} onChange={(e) => setAssignUserId(e.target.value)}>
+                    {assignees.map((u) => {
+                      const primary = u.full_name || u.email || u.id;
+                      const secondary = u.full_name ? u.email : null;
+                      const labelParts = [primary, secondary].filter(Boolean);
+                      const label = labelParts.join(" • ");
+                      return (
+                        <option key={u.id} value={u.id}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                    {assignees.length === 0 && <option value="">No assignees found</option>}
+                  </select>
                   <button
                     className="btn"
                     onClick={async () => {
@@ -191,6 +233,7 @@ export default function GapDashboardPage() {
                         setError(err instanceof ApiError ? err.message : "Assign failed");
                       }
                     }}
+                    disabled={!assignUserId.trim()}
                   >
                     Assign
                   </button>

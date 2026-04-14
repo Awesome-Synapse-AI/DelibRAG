@@ -5,6 +5,8 @@ import type {
   ChatResponse,
   CurrentUser,
   GapTicket,
+  IndexCollectionOption,
+  SampleDocumentEntry,
   SessionDetail,
   SessionSummary,
   UserSummary,
@@ -135,6 +137,15 @@ export async function listUsers(roles?: string[]): Promise<UserSummary[]> {
   return apiRequest<UserSummary[]>(`/auth/users${roleParam}`);
 }
 
+export async function listIndexCollections(): Promise<IndexCollectionOption[]> {
+  return apiRequest<IndexCollectionOption[]>("/indexing/collections");
+}
+
+export async function listSampleDocuments(): Promise<SampleDocumentEntry[]> {
+  const res = await apiRequest<{ documents: SampleDocumentEntry[] }>("/gaps/docs/list");
+  return res.documents ?? [];
+}
+
 export async function refreshToken(): Promise<AuthTokens | null> {
   return refreshTokens();
 }
@@ -183,6 +194,9 @@ export async function resolveGapTicket(
     action: "add_document" | "deprecate" | "update_document";
     document_path?: string;
     source_id?: string;
+    source_ids?: string[];
+    is_deprecated?: boolean;
+    target_department?: string;
     notes?: string;
   },
 ): Promise<GapTicket> {
@@ -190,6 +204,80 @@ export async function resolveGapTicket(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  });
+}
+
+export async function resolveGapAddDocumentUpload(params: {
+  ticketId: string;
+  file: File;
+  filename?: string;
+  target_department?: string;
+  notes?: string;
+}): Promise<GapTicket> {
+  const form = new FormData();
+  form.set("file", params.file);
+  if (params.filename) form.set("filename", params.filename);
+  if (params.target_department) form.set("target_department", params.target_department);
+  if (params.notes) form.set("notes", params.notes);
+  return apiRequest<GapTicket>(`/gaps/${encodeURIComponent(params.ticketId)}/resolve/add_document/upload`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function resolveGapAddDocumentText(params: {
+  ticketId: string;
+  filename: string;
+  text: string;
+  target_department?: string;
+  notes?: string;
+}): Promise<GapTicket> {
+  return apiRequest<GapTicket>(`/gaps/${encodeURIComponent(params.ticketId)}/resolve/add_document/text`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: params.filename,
+      text: params.text,
+      target_department: params.target_department,
+      notes: params.notes,
+    }),
+  });
+}
+
+export async function resolveGapUpdateDocumentUpload(params: {
+  ticketId: string;
+  target_filename: string;
+  file: File;
+  target_department?: string;
+  notes?: string;
+}): Promise<GapTicket> {
+  const form = new FormData();
+  form.set("target_filename", params.target_filename);
+  form.set("file", params.file);
+  if (params.target_department) form.set("target_department", params.target_department);
+  if (params.notes) form.set("notes", params.notes);
+  return apiRequest<GapTicket>(`/gaps/${encodeURIComponent(params.ticketId)}/resolve/update_document/upload`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function resolveGapDeprecateSources(params: {
+  ticketId: string;
+  source_ids: string[];
+  is_deprecated: boolean;
+  target_department?: string;
+  notes?: string;
+}): Promise<GapTicket> {
+  return apiRequest<GapTicket>(`/gaps/${encodeURIComponent(params.ticketId)}/resolve/deprecate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source_ids: params.source_ids,
+      is_deprecated: params.is_deprecated,
+      target_department: params.target_department,
+      notes: params.notes,
+    }),
   });
 }
 

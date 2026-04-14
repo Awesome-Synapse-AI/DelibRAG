@@ -54,6 +54,9 @@ class GapTicketResolvePayload(BaseModel):
     action: ResolutionAction
     document_path: Optional[str] = None
     source_id: Optional[str] = None
+    source_ids: Optional[list[str]] = None
+    is_deprecated: Optional[bool] = None
+    target_department: Optional[str] = None
     notes: Optional[str] = None
 
 

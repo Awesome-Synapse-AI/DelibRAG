@@ -1,6 +1,9 @@
-from typing import Any, Dict
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient, QdrantClient
@@ -40,6 +43,20 @@ class GapDetectorCheckRequest(BaseModel):
     department: str | None = None
     confidence: float | None = None
     force_in_scope: bool | None = None
+
+
+class AddDocumentTextPayload(BaseModel):
+    filename: str
+    text: str
+    target_department: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class DeprecateSourcesPayload(BaseModel):
+    source_ids: List[str]
+    is_deprecated: bool = True
+    target_department: Optional[str] = None
+    notes: Optional[str] = None
 
 
 def _parse_semver(version: str) -> tuple[int, int, int]:
@@ -97,6 +114,91 @@ def _collection_for_department(department: str) -> str:
     if dep in {"management", "manager"}:
         return settings.manager_collection_name
     return settings.default_collection_name
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _sample_docs_dir() -> Path:
+    configured = (os.getenv("SAMPLE_DOCS_DIR") or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser())
+
+    repo_root = _repo_root()
+    candidates.extend(
+        [
+            repo_root / "sample-docs",
+            repo_root.parent / "sample-docs",
+            Path.cwd() / "sample-docs",
+            Path("/sample-docs"),
+        ]
+    )
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+
+    # Fall back to the first candidate path and let callers create it.
+    return candidates[0].resolve()
+
+
+_FILENAME_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+
+
+def _sanitize_filename(filename: str) -> str:
+    name = (filename or "").strip()
+    name = Path(name).name
+    if not name or not _FILENAME_RE.match(name):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
+    if not name.lower().endswith((".txt", ".md")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .txt and .md files are allowed")
+    return name
+
+
+def _normalize_source_id(raw: str) -> str:
+    value = (raw or "").strip()
+    if not value:
+        return value
+
+    # If user provides a bare filename or a relative sample-docs path,
+    # normalize to the absolute path we store in Qdrant metadata.
+    docs_dir = _sample_docs_dir()
+    lowered = value.lower().replace("\\", "/")
+    if lowered.startswith("sample-docs/"):
+        name = _sanitize_filename(lowered.split("/", 1)[1])
+        return str(docs_dir / name)
+    if "/" not in lowered and "\\" not in value and ":" not in value:
+        if lowered.endswith((".txt", ".md")):
+            name = _sanitize_filename(value)
+            return str(docs_dir / name)
+    return value
+
+
+def _allowed_departments_for_user(user) -> list[str]:
+    role_value = getattr(user, "role", "")
+    role = role_value.value if hasattr(role_value, "value") else str(role_value)
+    normalized = (role or "").strip().lower()
+    if normalized == UserRole.admin.value:
+        return ["clinical", "management", "general"]
+    if normalized == UserRole.manager.value:
+        return ["management", "general"]
+    return ["clinical", "general"]
+
+
+def _validate_target_department(user, target_department: Optional[str]) -> str:
+    dep = (target_department or getattr(user, "department", None) or "general").strip().lower()
+    if dep in {"manager"}:
+        dep = "management"
+    if dep in {"clinician"}:
+        dep = "clinical"
+    if dep not in {"clinical", "management", "general"}:
+        dep = "general"
+    if dep not in _allowed_departments_for_user(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to index into selected department")
+    return dep
 
 
 def _serialize_ticket(ticket: GapTicket) -> Dict[str, Any]:
@@ -267,12 +369,151 @@ async def resolve_gap(
     db: AsyncSession = Depends(get_db),
     user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
 ):
+    if payload.target_department is not None:
+        payload.target_department = _validate_target_department(user, payload.target_department)
+    if payload.action == "deprecate":
+        if payload.source_id:
+            payload.source_id = _normalize_source_id(payload.source_id)
+        if payload.source_ids:
+            payload.source_ids = [_normalize_source_id(s) for s in payload.source_ids if str(s).strip()]
     try:
         ticket = await ingest_resolution(ticket_id=ticket_id, resolution=payload, user=user, db=db)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if not ticket:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap ticket not found")
+    return _serialize_ticket(ticket)
+
+
+@router.get("/docs/list")
+async def list_sample_documents(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
+):
+    _ = db  # reserved for future auditing
+    docs_dir = _sample_docs_dir()
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for p in sorted(docs_dir.iterdir()):
+        if not p.is_file():
+            continue
+        if not p.name.lower().endswith((".txt", ".md")):
+            continue
+        stat = p.stat()
+        entries.append({"name": p.name, "size": stat.st_size, "modified_at": stat.st_mtime})
+    return {"documents": entries}
+
+
+@router.post("/{ticket_id}/resolve/add_document/upload")
+async def resolve_add_document_upload(
+    ticket_id: str,
+    file: UploadFile = File(...),
+    filename: str | None = Form(default=None),
+    target_department: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
+):
+    dep = _validate_target_department(user, target_department)
+    final_name = _sanitize_filename(filename or file.filename or "")
+    docs_dir = _sample_docs_dir()
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    path = docs_dir / final_name
+    content = await file.read()
+    path.write_bytes(content)
+
+    payload = GapTicketResolvePayload(
+        action="add_document",
+        document_path=str(path),
+        notes=notes,
+        target_department=dep,
+    )
+    try:
+        ticket = await ingest_resolution(ticket_id=ticket_id, resolution=payload, user=user, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return _serialize_ticket(ticket)
+
+
+@router.post("/{ticket_id}/resolve/add_document/text")
+async def resolve_add_document_text(
+    ticket_id: str,
+    payload: AddDocumentTextPayload,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
+):
+    dep = _validate_target_department(user, payload.target_department)
+    final_name = _sanitize_filename(payload.filename)
+    docs_dir = _sample_docs_dir()
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    path = docs_dir / final_name
+    path.write_text(payload.text or "", encoding="utf-8")
+
+    resolution = GapTicketResolvePayload(
+        action="add_document",
+        document_path=str(path),
+        notes=payload.notes,
+        target_department=dep,
+    )
+    try:
+        ticket = await ingest_resolution(ticket_id=ticket_id, resolution=resolution, user=user, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return _serialize_ticket(ticket)
+
+
+@router.post("/{ticket_id}/resolve/update_document/upload")
+async def resolve_update_document_upload(
+    ticket_id: str,
+    target_filename: str = Form(...),
+    file: UploadFile = File(...),
+    target_department: str | None = Form(default=None),
+    notes: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
+):
+    dep = _validate_target_department(user, target_department)
+    final_name = _sanitize_filename(target_filename)
+    docs_dir = _sample_docs_dir()
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    path = docs_dir / final_name
+    content = await file.read()
+    path.write_bytes(content)
+
+    resolution = GapTicketResolvePayload(
+        action="update_document",
+        source_id=str(path),
+        document_path=str(path),
+        notes=notes,
+        target_department=dep,
+    )
+    try:
+        ticket = await ingest_resolution(ticket_id=ticket_id, resolution=resolution, user=user, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return _serialize_ticket(ticket)
+
+
+@router.post("/{ticket_id}/resolve/deprecate")
+async def resolve_deprecate_sources(
+    ticket_id: str,
+    payload: DeprecateSourcesPayload,
+    db: AsyncSession = Depends(get_db),
+    user=Depends(require_role(UserRole.clinician, UserRole.manager, UserRole.admin)),
+):
+    dep = _validate_target_department(user, payload.target_department)
+    normalized_sources = [_normalize_source_id(s) for s in (payload.source_ids or []) if str(s).strip()]
+    resolution = GapTicketResolvePayload(
+        action="deprecate",
+        source_ids=normalized_sources,
+        is_deprecated=payload.is_deprecated,
+        notes=payload.notes,
+        target_department=dep,
+    )
+    try:
+        ticket = await ingest_resolution(ticket_id=ticket_id, resolution=resolution, user=user, db=db)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return _serialize_ticket(ticket)
 
 

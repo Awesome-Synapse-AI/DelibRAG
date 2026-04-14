@@ -8,11 +8,16 @@ import {
   assignGapTicket,
   deleteGapTicket,
   getGapTicket,
+  listIndexCollections,
+  listSampleDocuments,
   listGapTickets,
   listUsers,
-  resolveGapTicket,
+  resolveGapAddDocumentText,
+  resolveGapAddDocumentUpload,
+  resolveGapDeprecateSources,
+  resolveGapUpdateDocumentUpload,
 } from "@/lib/api";
-import type { GapTicket, UserSummary } from "@/lib/types";
+import type { GapTicket, IndexCollectionOption, SampleDocumentEntry, UserSummary } from "@/lib/types";
 
 function durationHours(from?: string | null, to?: string | null) {
   if (!from || !to) {
@@ -28,14 +33,27 @@ function durationHours(from?: string | null, to?: string | null) {
 export default function GapDashboardPage() {
   const [tickets, setTickets] = useState<GapTicket[]>([]);
   const [assignees, setAssignees] = useState<UserSummary[]>([]);
+  const [collections, setCollections] = useState<IndexCollectionOption[]>([]);
+  const [sampleDocs, setSampleDocs] = useState<SampleDocumentEntry[]>([]);
   const [statusFilter, setStatusFilter] = useState("open");
   const [deptFilter, setDeptFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [assignUserId, setAssignUserId] = useState<string>("");
   const [resolveAction, setResolveAction] = useState<"add_document" | "deprecate" | "update_document">("add_document");
-  const [documentPath, setDocumentPath] = useState("");
-  const [sourceId, setSourceId] = useState("");
+  const [targetDepartment, setTargetDepartment] = useState<string>("general");
+
+  const [addMode, setAddMode] = useState<"upload" | "text">("upload");
+  const [addFilename, setAddFilename] = useState<string>("");
+  const [addText, setAddText] = useState<string>("");
+  const [addFile, setAddFile] = useState<File | null>(null);
+
+  const [updateTargetFilename, setUpdateTargetFilename] = useState<string>("");
+  const [updateFile, setUpdateFile] = useState<File | null>(null);
+
+  const [deprecateSources, setDeprecateSources] = useState<string[]>([]);
+  const [manualSourceId, setManualSourceId] = useState<string>("");
+  const [markDeprecated, setMarkDeprecated] = useState<boolean>(true);
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -49,6 +67,30 @@ export default function GapDashboardPage() {
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Cannot load assignees");
+    }
+  }
+
+  async function loadCollections() {
+    try {
+      const data = await listIndexCollections();
+      setCollections(data);
+      if (data.length > 0 && !targetDepartment) {
+        setTargetDepartment(data[0].department);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Cannot load index collections");
+    }
+  }
+
+  async function loadSampleDocs() {
+    try {
+      const docs = await listSampleDocuments();
+      setSampleDocs(docs);
+      if (!updateTargetFilename && docs.length > 0) {
+        setUpdateTargetFilename(docs[0].name);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Cannot load sample documents");
     }
   }
 
@@ -70,6 +112,8 @@ export default function GapDashboardPage() {
 
   useEffect(() => {
     void loadAssignees();
+    void loadCollections();
+    void loadSampleDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -77,6 +121,14 @@ export default function GapDashboardPage() {
     void loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
+
+  useEffect(() => {
+    if (resolveAction !== "update_document") {
+      return;
+    }
+    void loadSampleDocs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolveAction]);
 
   const filtered = useMemo(() => {
     return tickets.filter((ticket) => {
@@ -87,6 +139,18 @@ export default function GapDashboardPage() {
   }, [tickets, deptFilter, typeFilter]);
 
   const selectedTicket = useMemo(() => filtered.find((ticket) => ticket.id === selectedId) ?? null, [filtered, selectedId]);
+
+  useEffect(() => {
+    if (!selectedTicket || collections.length === 0) {
+      return;
+    }
+    const dep = (selectedTicket.department ?? "general").toLowerCase();
+    const normalized = dep === "manager" ? "management" : dep === "clinician" ? "clinical" : dep;
+    if (collections.some((c) => c.department === normalized)) {
+      setTargetDepartment(normalized);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTicket?.id, collections.length]);
 
   const assigneeNameById = useMemo(() => {
     const map = new Map<string, string>();
@@ -248,34 +312,211 @@ export default function GapDashboardPage() {
                     <option value="deprecate">deprecate</option>
                     <option value="update_document">update_document</option>
                   </select>
-                  {(resolveAction === "add_document" || resolveAction === "update_document") && (
-                    <input
-                      className="input"
-                      placeholder="document_path"
-                      value={documentPath}
-                      onChange={(e) => setDocumentPath(e.target.value)}
-                    />
+
+                  <select className="select" value={targetDepartment} onChange={(e) => setTargetDepartment(e.target.value)}>
+                    {collections.map((c) => (
+                      <option key={c.department} value={c.department}>
+                        {c.label}
+                      </option>
+                    ))}
+                    {collections.length === 0 && <option value="general">General Index</option>}
+                  </select>
+
+                  {resolveAction === "add_document" && (
+                    <div className="card" style={{ padding: 10, background: "white" }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Add Document</div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="btn" type="button" onClick={() => setAddMode("upload")} disabled={addMode === "upload"}>
+                          Upload file
+                        </button>
+                        <button className="btn" type="button" onClick={() => setAddMode("text")} disabled={addMode === "text"}>
+                          Paste text
+                        </button>
+                      </div>
+                      {addMode === "upload" && (
+                        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                          <input
+                            className="input"
+                            placeholder="save as filename (optional, e.g. new_doc.txt)"
+                            value={addFilename}
+                            onChange={(e) => setAddFilename(e.target.value)}
+                          />
+                          <input
+                            className="input"
+                            type="file"
+                            accept=".txt,.md,text/plain,text/markdown"
+                            onChange={(e) => setAddFile(e.target.files?.[0] ?? null)}
+                          />
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            Saved to <code>sample-docs/</code> and indexed to the selected index.
+                          </div>
+                        </div>
+                      )}
+                      {addMode === "text" && (
+                        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                          <input
+                            className="input"
+                            placeholder="filename (required, e.g. new_doc.txt)"
+                            value={addFilename}
+                            onChange={(e) => setAddFilename(e.target.value)}
+                          />
+                          <textarea className="textarea" rows={6} placeholder="document text..." value={addText} onChange={(e) => setAddText(e.target.value)} />
+                        </div>
+                      )}
+                    </div>
                   )}
-                  {(resolveAction === "deprecate" || resolveAction === "update_document") && (
-                    <input className="input" placeholder="source_id" value={sourceId} onChange={(e) => setSourceId(e.target.value)} />
+
+                  {resolveAction === "update_document" && (
+                    <div className="card" style={{ padding: 10, background: "white" }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Update Document</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        <select className="select" value={updateTargetFilename} onChange={(e) => setUpdateTargetFilename(e.target.value)}>
+                          {sampleDocs.map((d) => (
+                            <option key={d.name} value={d.name}>
+                              {d.name}
+                            </option>
+                          ))}
+                          {sampleDocs.length === 0 && <option value="">No documents found</option>}
+                        </select>
+                        <input
+                          className="input"
+                          type="file"
+                          accept=".txt,.md,text/plain,text/markdown"
+                          onChange={(e) => setUpdateFile(e.target.files?.[0] ?? null)}
+                        />
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          Uploaded file overwrites the selected name in <code>sample-docs/</code> and is re-indexed.
+                        </div>
+                      </div>
+                    </div>
                   )}
+
+                  {resolveAction === "deprecate" && (
+                    <div className="card" style={{ padding: 10, background: "white" }}>
+                      <div style={{ fontWeight: 600, marginBottom: 6 }}>Deprecate Sources</div>
+                      <select className="select" value={markDeprecated ? "yes" : "no"} onChange={(e) => setMarkDeprecated(e.target.value === "yes")}>
+                        <option value="yes">Mark as deprecated</option>
+                        <option value="no">Keep active (prevent future auto-deprecate)</option>
+                      </select>
+                      <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                        {(selectedTicket.conflicting_sources ?? []).length > 0 ? (
+                          (selectedTicket.conflicting_sources ?? []).map((src) => {
+                            const checked = deprecateSources.includes(src);
+                            return (
+                              <label key={src} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    setDeprecateSources((prev) => {
+                                      if (e.target.checked) return [...new Set([...prev, src])];
+                                      return prev.filter((x) => x !== src);
+                                    });
+                                  }}
+                                />
+                                <span style={{ wordBreak: "break-all" }}>{src}</span>
+                              </label>
+                            );
+                          })
+                        ) : (
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            No conflicting sources on this ticket. Add a source id manually below.
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, marginTop: 8 }}>
+                        <input
+                          className="input"
+                          placeholder="source id (e.g. sample-docs/xyz.txt)"
+                          value={manualSourceId}
+                          onChange={(e) => setManualSourceId(e.target.value)}
+                        />
+                        <button
+                          className="btn"
+                          type="button"
+                          onClick={() => {
+                            const v = manualSourceId.trim();
+                            if (!v) return;
+                            setDeprecateSources((prev) => [...new Set([...prev, v])]);
+                            setManualSourceId("");
+                          }}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {deprecateSources.length > 0 && (
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          Selected: {deprecateSources.length} source(s)
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <textarea className="textarea" rows={3} placeholder="notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
                   <div style={{ display: "flex", gap: 8 }}>
                     <button
                       className="btn btn-primary"
                       onClick={async () => {
                         try {
-                          await resolveGapTicket(selectedTicket.id, {
-                            action: resolveAction,
-                            document_path: documentPath || undefined,
-                            source_id: sourceId || undefined,
-                            notes: notes || undefined,
-                          });
+                          if (resolveAction === "add_document") {
+                            if (addMode === "upload") {
+                              if (!addFile) {
+                                throw new Error("Please choose a file to upload");
+                              }
+                              await resolveGapAddDocumentUpload({
+                                ticketId: selectedTicket.id,
+                                file: addFile,
+                                filename: addFilename.trim() || undefined,
+                                target_department: targetDepartment,
+                                notes: notes || undefined,
+                              });
+                            } else {
+                              if (!addFilename.trim()) {
+                                throw new Error("Filename is required");
+                              }
+                              await resolveGapAddDocumentText({
+                                ticketId: selectedTicket.id,
+                                filename: addFilename.trim(),
+                                text: addText,
+                                target_department: targetDepartment,
+                                notes: notes || undefined,
+                              });
+                            }
+                            await loadSampleDocs();
+                          } else if (resolveAction === "update_document") {
+                            if (!updateTargetFilename.trim()) {
+                              throw new Error("Please select a document to update");
+                            }
+                            if (!updateFile) {
+                              throw new Error("Please choose a file to upload");
+                            }
+                            await resolveGapUpdateDocumentUpload({
+                              ticketId: selectedTicket.id,
+                              target_filename: updateTargetFilename.trim(),
+                              file: updateFile,
+                              target_department: targetDepartment,
+                              notes: notes || undefined,
+                            });
+                            await loadSampleDocs();
+                          } else if (resolveAction === "deprecate") {
+                            if (deprecateSources.length === 0) {
+                              throw new Error("Select at least one source");
+                            }
+                            await resolveGapDeprecateSources({
+                              ticketId: selectedTicket.id,
+                              source_ids: deprecateSources,
+                              is_deprecated: markDeprecated,
+                              target_department: targetDepartment,
+                              notes: notes || undefined,
+                            });
+                          }
                           await loadData();
                           const fresh = await getGapTicket(selectedTicket.id);
                           setSelectedId(fresh.id);
                         } catch (err) {
-                          setError(err instanceof ApiError ? err.message : "Resolve failed");
+                          if (err instanceof ApiError) setError(err.message);
+                          else if (err instanceof Error) setError(err.message);
+                          else setError("Resolve failed");
                         }
                       }}
                     >

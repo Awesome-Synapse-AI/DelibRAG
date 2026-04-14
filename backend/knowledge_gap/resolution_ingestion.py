@@ -63,7 +63,7 @@ async def index_nodes(documents: List[Document], *, user_role: str, department: 
     build_qdrant_index(client, collection_name, documents, handlers)
 
 
-async def mark_nodes_deprecated(source_id: str, *, department: Optional[str]) -> None:
+async def mark_nodes_deprecated(source_id: str, *, department: Optional[str], is_deprecated: bool = True, lock_if_false: bool = True) -> None:
     client = _get_qdrant_client()
     collection_name = _collection_for_department(department)
     source_filter = models.Filter(
@@ -72,13 +72,21 @@ async def mark_nodes_deprecated(source_id: str, *, department: Optional[str]) ->
             models.FieldCondition(key="doc_id", match=models.MatchValue(value=source_id)),
             models.FieldCondition(key="metadata.source_id", match=models.MatchValue(value=source_id)),
             models.FieldCondition(key="metadata.doc_id", match=models.MatchValue(value=source_id)),
-        ]
+        ],
     )
-    client.set_payload(
-        collection_name=collection_name,
-        points=source_filter,
-        payload={"is_deprecated": True},
-    )
+
+    payload: Dict[str, object] = {"is_deprecated": bool(is_deprecated)}
+    if not is_deprecated and lock_if_false:
+        payload["deprecation_lock"] = True
+
+    # Best-effort: if deprecating, avoid overriding explicit lockouts.
+    if is_deprecated:
+        source_filter = models.Filter(
+            should=source_filter.should,
+            must_not=[models.FieldCondition(key="deprecation_lock", match=models.MatchValue(value=True))],
+        )
+
+    client.set_payload(collection_name=collection_name, points=source_filter, payload=payload)
 
 
 async def delete_nodes_by_source(source_id: str, *, department: Optional[str]) -> None:
@@ -100,6 +108,8 @@ async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload,
     if not ticket:
         raise ValueError(f"Gap ticket {ticket_id} not found")
 
+    target_department = resolution.target_department or user.department
+
     if resolution.action == ResolutionAction.add_document:
         if not resolution.document_path:
             raise ValueError("document_path is required for add_document resolution")
@@ -108,7 +118,7 @@ async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload,
         nodes = await run_indexing_pipeline(
             file_path=resolution.document_path,
             user_role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            department=user.department,
+            department=target_department,
             extra_metadata={
                 "gap_ticket_id": ticket_id,
                 "source_trust_score": 0.8,
@@ -118,41 +128,46 @@ async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload,
         await index_nodes(
             nodes,
             user_role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            department=user.department,
+            department=target_department,
         )
         await upsert_source_trust_score(
             db,
             source_id=source_id,
             source_name=Path(source_id).name,
-            department=user.department,
+            department=target_department,
             initial_score=0.8,
         )
         await update_routing_preferences(
             db,
-            department=user.department,
+            department=target_department,
             prefer_source_id=source_id,
         )
 
     elif resolution.action == ResolutionAction.deprecate:
-        source_id = resolution.source_id
-        if not source_id:
-            raise ValueError("source_id is required for deprecate resolution")
-        await mark_nodes_deprecated(source_id=source_id, department=user.department)
-        await mark_source_deprecated(db, source_id=source_id, is_deprecated=True)
-        await update_routing_preferences(
-            db,
-            department=user.department,
-            avoid_source_id=source_id,
-        )
+        raw_sources = resolution.source_ids or ([resolution.source_id] if resolution.source_id else [])
+        sources = [str(s).strip() for s in raw_sources if str(s).strip()]
+        if not sources:
+            raise ValueError("source_id or source_ids is required for deprecate resolution")
+
+        is_deprecated = True if resolution.is_deprecated is None else bool(resolution.is_deprecated)
+        for source_id in sources:
+            await mark_nodes_deprecated(source_id=source_id, department=target_department, is_deprecated=is_deprecated)
+            await mark_source_deprecated(db, source_id=source_id, is_deprecated=is_deprecated)
+            await update_routing_preferences(
+                db,
+                department=target_department,
+                avoid_source_id=source_id if is_deprecated else None,
+                prefer_source_id=source_id if not is_deprecated else None,
+            )
 
     elif resolution.action == ResolutionAction.update_document:
         if not resolution.source_id or not resolution.document_path:
             raise ValueError("source_id and document_path are required for update_document resolution")
-        await delete_nodes_by_source(resolution.source_id, department=user.department)
+        await delete_nodes_by_source(resolution.source_id, department=target_department)
         nodes = await run_indexing_pipeline(
             resolution.document_path,
             user_role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            department=user.department,
+            department=target_department,
             extra_metadata={
                 "gap_ticket_id": ticket_id,
                 "resolved_by_role": user.role.value if hasattr(user.role, "value") else str(user.role),
@@ -161,24 +176,25 @@ async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload,
         await index_nodes(
             nodes,
             user_role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            department=user.department,
+            department=target_department,
         )
         new_source_id = str(Path(resolution.document_path))
         await upsert_source_trust_score(
             db,
             source_id=new_source_id,
             source_name=Path(new_source_id).name,
-            department=user.department,
+            department=target_department,
             initial_score=0.8,
         )
-        await update_routing_preferences(
-            db,
-            department=user.department,
-            prefer_source_id=new_source_id,
-            avoid_source_id=resolution.source_id,
-        )
+        if new_source_id != resolution.source_id:
+            await update_routing_preferences(
+                db,
+                department=target_department,
+                prefer_source_id=new_source_id,
+                avoid_source_id=resolution.source_id,
+            )
 
-    await bump_department_trust_scores(db, user.department, delta=0.05)
+    await bump_department_trust_scores(db, target_department, delta=0.05)
     action_label = resolution.action.value
     notes = resolution.notes or ""
     resolution_notes = f"action={action_label}; notes={notes}".strip()

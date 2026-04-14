@@ -42,6 +42,7 @@ def build_indexing_pipeline(
             node.metadata["uploaded_by_role"] = role
             node.metadata["source_trust_score"] = 1.0
             node.metadata["is_deprecated"] = False
+            node.metadata["deprecation_lock"] = False
         return nodes
 
     return node_parser, metadata_extractors, inject_custom_metadata

@@ -24,6 +24,18 @@ export interface UserSummary {
   department?: string | null;
 }
 
+export interface IndexCollectionOption {
+  department: string;
+  collection: string;
+  label: string;
+}
+
+export interface SampleDocumentEntry {
+  name: string;
+  size: number;
+  modified_at: number;
+}
+
 export interface SessionMessage {
   role: "user" | "assistant";
   content: string;

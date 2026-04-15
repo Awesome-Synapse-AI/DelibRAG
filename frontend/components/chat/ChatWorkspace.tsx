@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE_URL, ApiError, deleteSession, getSession, listSessions, postChat } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
@@ -17,6 +17,10 @@ type UiMessage = SessionMessage & {
     title: string;
     section: string;
     trust_score: number;
+    excerpt?: string;
+    content?: string;
+    text?: string;
+    snippet?: string;
   }>;
 };
 
@@ -39,19 +43,41 @@ function toUiMessages(messages: SessionMessage[]): UiMessage[] {
 
 function citationMeta(
   citation: string,
-  detail?: { source: string; title: string; section: string; trust_score: number },
+  detail?: {
+    source: string;
+    title: string;
+    section: string;
+    trust_score: number;
+    excerpt?: string;
+    content?: string;
+    text?: string;
+    snippet?: string;
+  },
 ) {
+  const citationNormalized = citation.replaceAll("\\", "/");
+  const fallbackTitle = citationNormalized.split("/").pop() || citation;
+  const citationSection = citation.includes("§") ? citation.split("§")[1]?.trim() : "";
+
+  const contentCandidates = [
+    detail?.excerpt,
+    detail?.content,
+    detail?.text,
+    detail?.snippet,
+    detail?.section && detail.section !== "N/A" ? detail.section : "",
+    citationSection,
+  ];
+  const content = contentCandidates.find((x) => typeof x === "string" && x.trim())?.trim() || "No excerpt available for this citation.";
+  const trustValue = Number(detail?.trust_score);
+  const trust = Number.isFinite(trustValue) ? String(trustValue) : "Unknown";
+
   if (detail) {
     return {
-      title: detail.title,
-      section: detail.section,
-      trust: String(detail.trust_score),
+      title: (detail.title || fallbackTitle).trim(),
+      content,
+      trust,
     };
   }
-  const normalized = citation.replaceAll("\\", "/");
-  const title = normalized.split("/").pop() || citation;
-  const section = citation.includes("§") ? citation.split("§")[1]?.trim() : "N/A";
-  return { title, section, trust: "N/A" };
+  return { title: fallbackTitle, content, trust: "Unknown" };
 }
 
 async function streamChat(
@@ -165,7 +191,30 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
   const [query, setQuery] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [openCitation, setOpenCitation] = useState<string | null>(null);
+  /** Open citation panel anchored above the chip (stable position so you can scroll inside). */
+  const [citationPanel, setCitationPanel] = useState<{ key: string; x: number; y: number } | null>(null);
+  const citationLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const citationPanelKeyRef = useRef<string | null>(null);
+  citationPanelKeyRef.current = citationPanel?.key ?? null;
+
+  function clearCitationLeaveTimer() {
+    if (citationLeaveTimerRef.current != null) {
+      clearTimeout(citationLeaveTimerRef.current);
+      citationLeaveTimerRef.current = null;
+    }
+  }
+
+  function scheduleCitationClose() {
+    clearCitationLeaveTimer();
+    citationLeaveTimerRef.current = setTimeout(() => {
+      setCitationPanel(null);
+      citationLeaveTimerRef.current = null;
+    }, 280);
+  }
+
+  useEffect(() => {
+    return () => clearCitationLeaveTimer();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -442,27 +491,85 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       {(message.citations ?? []).map((citation, index) => {
                         const key = `${message.id}-${index}`;
-                        const expanded = openCitation === key;
+                        const expanded = citationPanel?.key === key;
                         const detail = message.citation_details?.[index];
                         const meta = citationMeta(citation, detail);
+                        const panelPos = citationPanel?.key === key ? citationPanel : null;
                         return (
-                          <div key={key}>
+                          <div
+                            key={key}
+                            style={{ position: "relative" }}
+                            onMouseLeave={() => {
+                              if (citationPanelKeyRef.current === key) {
+                                scheduleCitationClose();
+                              }
+                            }}
+                          >
                             <button
                               className="btn"
+                              type="button"
                               style={{ borderRadius: 999, padding: "6px 10px", fontSize: 12 }}
-                              onClick={() => setOpenCitation(expanded ? null : key)}
+                              onMouseEnter={(e) => {
+                                clearCitationLeaveTimer();
+                                const r = e.currentTarget.getBoundingClientRect();
+                                setCitationPanel({
+                                  key,
+                                  x: r.left + r.width / 2,
+                                  y: r.top - 6,
+                                });
+                              }}
                             >
                               {meta.title}
                             </button>
-                            {expanded && (
-                              <div className="card" style={{ marginTop: 6, padding: 10, width: 260 }}>
-                                <div style={{ fontSize: 13 }}>
-                                  <strong>Doc:</strong> {meta.title}
+                            {expanded && panelPos && (
+                              <div
+                                className="card"
+                                role="tooltip"
+                                onMouseEnter={clearCitationLeaveTimer}
+                                onMouseLeave={scheduleCitationClose}
+                                style={{
+                                  position: "fixed",
+                                  left: panelPos.x,
+                                  top: panelPos.y,
+                                  transform: "translate(-50%, -100%)",
+                                  zIndex: 1000,
+                                  width: 480,
+                                  maxHeight: 420,
+                                  padding: 0,
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  overflow: "hidden",
+                                  boxShadow: "0 10px 40px rgba(15, 23, 42, 0.18)",
+                                }}
+                              >
+                                <div style={{ flexShrink: 0, padding: "10px 12px 6px", borderBottom: "1px solid #e2e8f0" }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600 }}>Doc</div>
+                                  <div style={{ fontSize: 13, marginTop: 4, wordBreak: "break-word" }}>{meta.title}</div>
                                 </div>
-                                <div style={{ fontSize: 13 }}>
-                                  <strong>Section:</strong> {meta.section}
+                                <div
+                                  style={{
+                                    flex: "1 1 auto",
+                                    minHeight: 0,
+                                    height: 300,
+                                    overflowY: "auto",
+                                    padding: "10px 12px",
+                                    fontSize: 13,
+                                    whiteSpace: "pre-wrap",
+                                    lineHeight: 1.45,
+                                  }}
+                                >
+                                  <strong>Content</strong>
+                                  <div style={{ marginTop: 6 }}>{meta.content}</div>
                                 </div>
-                                <div style={{ fontSize: 13 }}>
+                                <div
+                                  style={{
+                                    flexShrink: 0,
+                                    padding: "8px 12px 10px",
+                                    borderTop: "1px solid #e2e8f0",
+                                    fontSize: 13,
+                                    background: "#f8fafc",
+                                  }}
+                                >
                                   <strong>Trust score:</strong> {meta.trust}
                                 </div>
                               </div>

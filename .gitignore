@@ -2,6 +2,7 @@
 scripts/lda_domains
 infra/qdrant
 backend/.index_store
+.next
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

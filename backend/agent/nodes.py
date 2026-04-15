@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from typing import Any, List
 import logging
+from pathlib import Path
 
 from llama_index.llms.openai import OpenAI
 
@@ -67,12 +68,22 @@ def extract_citation_details(nodes: List[Any]) -> List[dict]:
         source = meta.get("doc_id") or meta.get("source_id") or meta.get("source")
         if not source:
             continue
+        source_text = str(source)
+        title = str(meta.get("title") or Path(source_text).name or source_text)
+        section = str(meta.get("section") or meta.get("chunk_label") or "")
+        excerpt = _node_text(n).strip()
+        trust_raw = meta.get("source_trust_score", meta.get("trust_score", 1.0))
+        try:
+            trust_score = float(trust_raw)
+        except (TypeError, ValueError):
+            trust_score = 1.0
         details.append(
             {
-                "source": str(source),
-                "title": str(meta.get("title") or source),
-                "section": str(meta.get("section") or meta.get("chunk_label") or "N/A"),
-                "trust_score": float(meta.get("source_trust_score", 1.0)),
+                "source": source_text,
+                "title": title,
+                "section": section,
+                "trust_score": trust_score,
+                "excerpt": excerpt,
             }
         )
     return details
@@ -291,6 +302,7 @@ async def memory_save_node(state: AgentState) -> AgentState:
             "role": "assistant",
             "content": state.get("answer"),
             "citations": state.get("citations"),
+            "citation_details": state.get("citation_details"),
             "confidence": state.get("confidence"),
             "stakes_level": state.get("stakes_level"),
             "gap_ticket_id": state.get("gap_ticket_id"),

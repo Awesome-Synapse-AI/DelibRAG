@@ -40,6 +40,13 @@ export interface SessionMessage {
   role: "user" | "assistant";
   content: string;
   citations?: string[];
+  citation_details?: Array<{
+    source: string;
+    title: string;
+    section: string;
+    trust_score: number;
+    excerpt?: string;
+  }>;
   confidence?: number | null;
   stakes_level?: string | null;
   gap_ticket_id?: string | null;
@@ -67,6 +74,7 @@ export interface ChatResponse {
     title: string;
     section: string;
     trust_score: number;
+    excerpt?: string;
   }>;
   confidence?: number | null;
   stakes_level?: "low" | "high" | string;

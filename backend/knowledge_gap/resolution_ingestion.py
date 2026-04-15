@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from llama_index.core import Document
 from qdrant_client import QdrantClient, models
@@ -103,6 +104,78 @@ async def delete_nodes_by_source(source_id: str, *, department: Optional[str]) -
     client.delete(collection_name=collection_name, points_selector=source_filter)
 
 
+def _payload_doc_filename(payload: Dict[str, Any]) -> str:
+    for key in ("doc_id", "source_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return Path(value).name.lower()
+
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("doc_id", "source_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                return Path(value).name.lower()
+
+    # Some LlamaIndex points store the canonical metadata inside `_node_content`.
+    node_content = payload.get("_node_content")
+    if isinstance(node_content, str) and node_content.strip():
+        try:
+            parsed = json.loads(node_content)
+            if isinstance(parsed, dict):
+                nested_metadata = parsed.get("metadata")
+                if isinstance(nested_metadata, dict):
+                    nested_doc_id = nested_metadata.get("doc_id") or nested_metadata.get("source_id")
+                    if isinstance(nested_doc_id, str) and nested_doc_id.strip():
+                        return Path(nested_doc_id).name.lower()
+        except Exception:
+            pass
+
+    return ""
+
+
+async def delete_nodes_by_filename(filename_or_path: str, *, department: Optional[str]) -> int:
+    client = _get_qdrant_client()
+    collection_name = _collection_for_department(department)
+    target_name = Path(filename_or_path).name.lower()
+    if not target_name:
+        return 0
+
+    matched_ids: list[models.ExtendedPointId] = []
+    next_offset = None
+    while True:
+        points, next_offset = client.scroll(
+            collection_name=collection_name,
+            limit=256,
+            offset=next_offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if not points:
+            break
+        for point in points:
+            payload = point.payload or {}
+            if not isinstance(payload, dict):
+                continue
+            if _payload_doc_filename(payload) == target_name:
+                matched_ids.append(point.id)
+        if next_offset is None:
+            break
+
+    if not matched_ids:
+        return 0
+
+    # Delete in chunks to keep request payloads small.
+    chunk_size = 256
+    for start in range(0, len(matched_ids), chunk_size):
+        chunk = matched_ids[start : start + chunk_size]
+        client.delete(
+            collection_name=collection_name,
+            points_selector=models.PointIdsList(points=chunk),
+        )
+    return len(matched_ids)
+
+
 async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload, user, db: AsyncSession):
     ticket = await get_gap_ticket(db, ticket_id)
     if not ticket:
@@ -163,7 +236,8 @@ async def ingest_resolution(ticket_id: str, resolution: GapTicketResolvePayload,
     elif resolution.action == ResolutionAction.update_document:
         if not resolution.source_id or not resolution.document_path:
             raise ValueError("source_id and document_path are required for update_document resolution")
-        await delete_nodes_by_source(resolution.source_id, department=target_department)
+        # Remove all prior chunks for this document by filename (covers path-format differences).
+        await delete_nodes_by_filename(resolution.document_path, department=target_department)
         nodes = await run_indexing_pipeline(
             resolution.document_path,
             user_role=user.role.value if hasattr(user.role, "value") else str(user.role),

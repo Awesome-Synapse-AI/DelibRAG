@@ -31,6 +31,7 @@ from agent.nodes import (
     low_stakes_retrieve_node,
     memory_save_node,
     out_of_scope_response_node,
+    role_mismatch_answer_text,
     scope_check_node,
     stakes_classify_node,
 )
@@ -298,25 +299,32 @@ async def chat_stream(
                 working_state = await high_stakes_retrieve_node(working_state)
             working_state = await gap_detect_node(working_state)
 
-            prompt = build_prompt(working_state)
             streamed_text = ""
-            async for piece in answer_stream(prompt):
-                if not piece:
-                    continue
-                # Handle both cumulative and token-delta stream styles.
-                delta = piece
-                if piece.startswith(streamed_text):
-                    delta = piece[len(streamed_text) :]
-                    streamed_text = piece
-                else:
-                    streamed_text += piece
-                if delta:
-                    yield f"data: {json.dumps({'type':'chunk','content':delta})}\n\n"
+            if working_state.get("role_topic_mismatch"):
+                streamed_text = role_mismatch_answer_text(working_state)
+                working_state["answer"] = streamed_text
+                working_state["citations"] = []
+                working_state["citation_details"] = []
+                yield f"data: {json.dumps({'type':'chunk','content': streamed_text})}\n\n"
+            else:
+                prompt = build_prompt(working_state)
+                async for piece in answer_stream(prompt):
+                    if not piece:
+                        continue
+                    # Handle both cumulative and token-delta stream styles.
+                    delta = piece
+                    if piece.startswith(streamed_text):
+                        delta = piece[len(streamed_text) :]
+                        streamed_text = piece
+                    else:
+                        streamed_text += piece
+                    if delta:
+                        yield f"data: {json.dumps({'type':'chunk','content':delta})}\n\n"
 
-            working_state["answer"] = streamed_text
-            nodes = working_state.get("retrieved_nodes") or []
-            working_state["citations"] = extract_citations(nodes)
-            working_state["citation_details"] = extract_citation_details(nodes)
+                working_state["answer"] = streamed_text
+                nodes = working_state.get("retrieved_nodes") or []
+                working_state["citations"] = extract_citations(nodes)
+                working_state["citation_details"] = extract_citation_details(nodes)
             working_state = await confidence_check_node(working_state)
             working_state = await gap_detect_node(working_state)
             working_state = await gap_ticket_create_node(working_state)

@@ -16,7 +16,12 @@ from knowledge_gap.ticket_manager import create_gap_ticket
 from retrieval.context_builder import build_context_string
 from retrieval.entity_filter import filter_nodes_by_query_entities
 from retrieval.hybrid_retriever import build_hybrid_retriever, build_vector_retriever
-from retrieval.scope_classifier import ScopeClassifier, evaluate_scope_result
+from retrieval.scope_classifier import (
+    ScopeClassifier,
+    evaluate_scope_result,
+    infer_primary_knowledge_domain,
+    user_knowledge_domain_for_gap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +94,19 @@ def extract_citation_details(nodes: List[Any]) -> List[dict]:
     return details
 
 
+def role_mismatch_answer_text(state: AgentState) -> str:
+    domain = state.get("role_mismatch_query_domain")
+
+    if domain == "clinical" or domain == "management":
+        return "The retrieved information belongs to other roles, so there is no available information to answer your query.  No knowledge-gap ticket has been created."
+
+
+    return (
+        "This question does not match knowledge exposed for your current role. "
+        "No knowledge-gap ticket has been created."
+    )
+
+
 def build_prompt(state: AgentState) -> str:
     history = state.get("messages") or []
     rendered = []
@@ -115,6 +133,19 @@ async def scope_check_node(state: AgentState) -> AgentState:
     classifier = ScopeClassifier(department=state.get("user_department"))
     result = classifier.classify(state["query"])
     state["scope_result"] = result
+
+    # Check role-topic mismatch early — before retrieval and gap detection.
+    # This prevents gap tickets from firing when the query belongs to a different role's domain.
+    udom = user_knowledge_domain_for_gap(state.get("user_role"), state.get("user_department"))
+    if udom:  # skip check for admin (udom=None)
+        qdom = await infer_primary_knowledge_domain((state.get("query") or "").strip())
+        if qdom and qdom != udom:
+            state["role_topic_mismatch"] = True
+            state["role_mismatch_query_domain"] = qdom
+            return state
+
+    state["role_topic_mismatch"] = False
+    state.pop("role_mismatch_query_domain", None)
     return state
 
 
@@ -193,6 +224,12 @@ def get_llm(max_tokens: int = 2048):
 
 
 async def answer_generate_node(state: AgentState) -> AgentState:
+    if state.get("role_topic_mismatch"):
+        state["answer"] = role_mismatch_answer_text(state)
+        state["citations"] = []
+        state["citation_details"] = []
+        return state
+
     llm = get_llm(max_tokens=2048)
     prompt = build_prompt(state)
     response = await llm.acomplete(prompt)
@@ -218,6 +255,11 @@ async def answer_stream(prompt: str):
 
 
 async def confidence_check_node(state: AgentState) -> AgentState:
+    if state.get("role_topic_mismatch"):
+        state["confidence"] = 1.0
+        state["confidence_gate_passed"] = True
+        state["requires_human_review"] = False
+        return state
     gate = ConfidenceGate()
     return await gate.evaluate(state)
 
@@ -231,11 +273,28 @@ async def out_of_scope_response_node(state: AgentState) -> AgentState:
     return state
 
 
+async def role_mismatch_response_node(state: AgentState) -> AgentState:
+    state["answer"] = role_mismatch_answer_text(state)
+    state["citations"] = []
+    state["citation_details"] = []
+    state["confidence"] = 1.0
+    state["confidence_gate_passed"] = True
+    state["requires_human_review"] = False
+    state["gap_ticket_id"] = None
+    state["gap_ticket_preview"] = None
+    return state
+
+
 async def gap_detect_node(state: AgentState) -> AgentState:
     # Preserve first detected gap to keep deterministic precedence:
     # missing_knowledge/contradiction (pre-answer) before low_confidence (post-answer).
     if state.get("gap_ticket_id"):
         return state
+
+    # role_topic_mismatch is already resolved in scope_check_node — respect it here.
+    if state.get("role_topic_mismatch"):
+        return state
+
     detector = GapDetector()
     gap_ticket = await detector.check_gap(state)
     if gap_ticket:
@@ -245,6 +304,11 @@ async def gap_detect_node(state: AgentState) -> AgentState:
 
 
 async def gap_ticket_create_node(state: AgentState) -> AgentState:
+    if state.get("role_topic_mismatch"):
+        state.pop("gap_ticket_preview", None)
+        if state.get("gap_ticket_id") == "pending":
+            state["gap_ticket_id"] = None
+        return state
     if state.get("gap_ticket_id") != "pending":
         return state
     payload = state.get("gap_ticket_preview")

@@ -31,3 +31,5 @@ class AgentState(TypedDict, total=False):
     index: Optional[Any]
     storage_context: Optional[Any]
     db: Optional[Any]
+    role_topic_mismatch: Optional[bool]
+    role_mismatch_query_domain: Optional[str]

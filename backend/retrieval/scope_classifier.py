@@ -1,11 +1,68 @@
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Literal, Optional, Sequence
 
 import joblib
 
 logger = logging.getLogger(__name__)
+
+_DOMAIN_CLASSIFY_PROMPT = """Classify the following query into exactly one knowledge domain.
+
+Domains:
+- "clinical": medical care, patient treatment, clinical guidelines, diagnoses, medications, wellness, health protocols, nursing, therapy
+- "management": business operations, budgets, staffing, scheduling, HR, administration, strategy, reporting, compliance management
+- "ambiguous": cannot be clearly assigned to either domain
+
+Return strict JSON only, no explanation:
+{{"domain": "clinical"}} or {{"domain": "management"}} or {{"domain": "ambiguous"}}
+
+Query: {query}"""
+
+# Keyword sets used as a last-resort fallback when both LDA and LLM are unavailable.
+_CLINICAL_KEYWORDS = {
+    "patient", "clinical", "diagnosis", "medication", "treatment", "therapy",
+    "symptom", "disease", "nurse", "nursing", "physician", "doctor", "medical",
+    "wellness", "health", "guideline", "protocol", "dosage", "prescription",
+    "surgery", "ward", "icu", "triage", "vital", "blood", "cardiac", "respiratory",
+    "infection", "wound", "rehabilitation", "discharge", "admission", "allergy",
+}
+_MANAGEMENT_KEYWORDS = {
+    "budget", "revenue", "staffing", "schedule", "hr", "hiring", "payroll",
+    "compliance", "audit", "strategy", "kpi", "performance", "report", "forecast",
+    "procurement", "vendor", "contract", "policy", "operations", "management",
+    "administration", "headcount", "onboarding", "offboarding", "expense",
+}
+
+
+def _keyword_infer_domain(query: str) -> Optional[Literal["clinical", "management"]]:
+    tokens = set(re.findall(r"[a-z]+", query.lower()))
+    clinical_hits = len(tokens & _CLINICAL_KEYWORDS)
+    management_hits = len(tokens & _MANAGEMENT_KEYWORDS)
+    if clinical_hits > management_hits:
+        return "clinical"
+    if management_hits > clinical_hits:
+        return "management"
+    return None
+
+
+async def _llm_infer_domain(query: str) -> Optional[Literal["clinical", "management"]]:
+    """LLM-based fallback for domain inference when LDA models are unavailable."""
+    try:
+        from llama_index.llms.openai import OpenAI  # local import to avoid circular deps
+        llm = OpenAI(model="gpt-5-nano", max_tokens=32)
+        response = await llm.acomplete(_DOMAIN_CLASSIFY_PROMPT.format(query=query))
+        text = getattr(response, "text", str(response))
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1:
+            payload = json.loads(text[start:end + 1])
+            domain = str(payload.get("domain", "")).strip().lower()
+            if domain in {"clinical", "management"}:
+                return domain  # type: ignore[return-value]
+    except Exception:
+        logger.warning("LLM domain inference failed for query=%r", query, exc_info=True)
+    return None
 
 
 class ScopeClassifier:
@@ -126,6 +183,60 @@ class ScopeClassifier:
                 return manifest_file, lda_file, vec_file
 
         return None, None, None
+
+
+async def infer_primary_knowledge_domain(query: str, margin: float = 0.06) -> Optional[Literal["clinical", "management"]]:
+    """
+    Decide whether the query aligns primarily with clinical vs management knowledge.
+    Priority: LDA models → LLM classifier → keyword heuristic.
+    Returns None only if all three methods are ambiguous.
+    """
+    clinical_sc = ScopeClassifier(department="clinical")
+    manager_sc = ScopeClassifier(department="manager")
+
+    # 1. LDA path — fast, no LLM cost
+    if clinical_sc.enabled and manager_sc.enabled:
+        cr = clinical_sc.classify(query)
+        mr = manager_sc.classify(query)
+        cin = bool(cr.get("in_scope"))
+        min_sc = bool(mr.get("in_scope"))
+        cc = float(cr.get("confidence") or 0.0)
+        mc = float(mr.get("confidence") or 0.0)
+
+        if cin and not min_sc:
+            return "clinical"
+        if min_sc and not cin:
+            return "management"
+        if cin and min_sc:
+            if cc > mc + margin:
+                return "clinical"
+            if mc > cc + margin:
+                return "management"
+        # LDA ambiguous — fall through to LLM
+
+    # 2. LLM fallback
+    logger.debug("LDA models unavailable or ambiguous; using LLM fallback for domain inference.")
+    llm_result = await _llm_infer_domain(query)
+    if llm_result:
+        return llm_result
+
+    # 3. Keyword heuristic — always available, zero latency
+    logger.debug("LLM domain inference unavailable; using keyword heuristic.")
+    return _keyword_infer_domain(query)
+
+
+def user_knowledge_domain_for_gap(user_role: Optional[str], user_department: Optional[str]) -> Optional[Literal["clinical", "management"]]:
+    """Map account to the primary knowledge silo. None => do not enforce role/topic mismatch rules (e.g. admin)."""
+    role = (user_role or "").strip().lower()
+    dept = (user_department or "").strip().lower()
+
+    if role == "admin" or dept == "admin":
+        return None
+    if role in {"manager"} or dept in {"management", "manager"}:
+        return "management"
+    if role in {"clinician"} or dept in {"clinical", "clinician"}:
+        return "clinical"
+    return None
 
 
 def evaluate_scope_result(scope_result: Dict[str, Any], retrieved_docs: Optional[Sequence[Any]]) -> Dict[str, Any]:

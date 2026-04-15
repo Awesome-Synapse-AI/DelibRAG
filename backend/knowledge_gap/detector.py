@@ -40,6 +40,9 @@ class GapDetector:
         self._llm = OpenAI(model=self.llm_model)
 
     async def check_gap(self, state: AgentState) -> Optional[Dict[str, Any]]:
+        if state.get("role_topic_mismatch"):
+            return None
+
         nodes = state.get("retrieved_nodes") or []
         query = state.get("query", "")
         stakes = (state.get("stakes_level") or "").lower()

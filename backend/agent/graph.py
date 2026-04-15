@@ -11,6 +11,7 @@ from agent.nodes import (
     low_stakes_retrieve_node,
     memory_save_node,
     out_of_scope_response_node,
+    role_mismatch_response_node,
     scope_check_node,
     stakes_classify_node,
 )
@@ -32,11 +33,15 @@ def build_agent_graph():
     graph.add_node("confidence_check", confidence_check_node)
     graph.add_node("audit_log", audit_log_node)
     graph.add_node("out_of_scope_response", out_of_scope_response_node)
+    graph.add_node("role_mismatch_response", role_mismatch_response_node)
     graph.add_node("memory_save", memory_save_node)
 
     graph.set_entry_point("load_history")
     graph.add_edge("load_history", "scope_check")
+
     def route_after_scope(state: AgentState):
+        if state.get("role_topic_mismatch"):
+            return "role_mismatch_response"
         scope = (state.get("scope_result") or {}).get("in_scope")
         if not scope:
             return "out_of_scope_response"
@@ -46,6 +51,7 @@ def build_agent_graph():
         "scope_check",
         route_after_scope,
         {
+            "role_mismatch_response": "role_mismatch_response",
             "out_of_scope_response": "out_of_scope_response",
             "stakes_classify": "stakes_classify",
         },
@@ -75,6 +81,7 @@ def build_agent_graph():
     graph.add_edge("gap_ticket_create", "audit_log")
     graph.add_edge("audit_log", "memory_save")
     graph.add_edge("out_of_scope_response", "audit_log")
+    graph.add_edge("role_mismatch_response", "audit_log")
     graph.add_edge("memory_save", END)
 
     return graph.compile()

@@ -123,8 +123,15 @@ def _department_for_role(role: str) -> str:
 
 def _effective_department(user) -> str:
     raw_department = (getattr(user, "department", None) or "").strip().lower()
-    if raw_department and raw_department not in {"general", "string", "default"}:
+    # Only use the department if it's a valid one
+    if raw_department in {"clinical", "clinician", "management", "manager"}:
+        # Normalize to standard names
+        if raw_department in {"clinician"}:
+            return "clinical"
+        if raw_department in {"manager"}:
+            return "management"
         return raw_department
+    # Fall back to role-based department
     role_value = getattr(user, "role", "")
     role_text = role_value.value if hasattr(role_value, "value") else str(role_value)
     return _department_for_role(role_text)

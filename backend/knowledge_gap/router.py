@@ -189,7 +189,27 @@ def _allowed_departments_for_user(user) -> list[str]:
 
 
 def _validate_target_department(user, target_department: Optional[str]) -> str:
-    dep = (target_department or getattr(user, "department", None) or "general").strip().lower()
+    # If target_department is provided, use it; otherwise fall back to user's role
+    if target_department:
+        dep = target_department.strip().lower()
+    else:
+        # Get department from user, but validate it
+        user_dept = (getattr(user, "department", None) or "").strip().lower()
+        if user_dept in {"clinical", "clinician", "management", "manager"}:
+            dep = user_dept
+        else:
+            # Fall back to role-based department
+            role_value = getattr(user, "role", "")
+            role = role_value.value if hasattr(role_value, "value") else str(role_value)
+            role = role.strip().lower()
+            if role == "clinician":
+                dep = "clinical"
+            elif role == "manager":
+                dep = "management"
+            else:
+                dep = "general"
+    
+    # Normalize department names
     if dep in {"manager"}:
         dep = "management"
     if dep in {"clinician"}:

@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import ProtectedShell from "@/components/ProtectedShell";
 import {
+  API_BASE_URL,
   ApiError,
   assignGapTicket,
-  deleteGapTicket,
   getGapTicket,
   listIndexCollections,
   listSampleDocuments,
@@ -17,6 +17,7 @@ import {
   resolveGapDeprecateSources,
   resolveGapUpdateDocumentUpload,
 } from "@/lib/api";
+import { getAccessToken } from "@/lib/auth";
 import type { GapTicket, IndexCollectionOption, SampleDocumentEntry, UserSummary } from "@/lib/types";
 
 function durationHours(from?: string | null, to?: string | null) {
@@ -182,13 +183,6 @@ export default function GapDashboardPage() {
                   <option value="resolved">resolved</option>
                   <option value="wont_fix">wont_fix</option>
                 </select>
-                <input
-                  className="input"
-                  style={{ maxWidth: 180 }}
-                  placeholder="department or all"
-                  value={deptFilter}
-                  onChange={(e) => setDeptFilter(e.target.value || "all")}
-                />
                 <select className="select" style={{ maxWidth: 180 }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
                   <option value="all">all types</option>
                   <option value="missing_knowledge">missing_knowledge</option>
@@ -287,8 +281,8 @@ export default function GapDashboardPage() {
                       </select>
 
                       <select className="select" value={targetDepartment} onChange={(e) => setTargetDepartment(e.target.value)}>
-                        {collections.map((c) => <option key={c.department} value={c.department}>{c.label}</option>)}
-                        {collections.length === 0 && <option value="general">General Index</option>}
+                        {collections.map((c) => <option key={c.department} value={c.department}>{c.collection}</option>)}
+                        {collections.length === 0 && <option value="clinical-info">clinical-info</option>}
                       </select>
 
                       {resolveAction === "add_document" && (
@@ -405,15 +399,25 @@ export default function GapDashboardPage() {
                           className="btn"
                           onClick={async () => {
                             try {
-                              await deleteGapTicket(selectedTicket.id);
-                              setSelectedId(null);
+                              const token = getAccessToken();
+                              if (!token) throw new Error('Not authenticated');
+                              const response = await fetch(`${API_BASE_URL}/knowledge-gap/${selectedTicket.id}/status`, {
+                                method: 'PATCH',
+                                headers: {
+                                  'Content-Type': 'application/json',
+                                  'Authorization': `Bearer ${token}`
+                                },
+                                body: JSON.stringify({ status: 'wont_fix' })
+                              });
+                              if (!response.ok) throw new Error('Failed to update status');
                               await loadData();
+                              setSelectedId(null);
                             } catch (err) {
-                              setError(err instanceof ApiError ? err.message : "Delete failed");
+                              setError(err instanceof Error ? err.message : "Mark as won't fix failed");
                             }
                           }}
                         >
-                          Delete
+                          Won't Fix
                         </button>
                       </div>
                     </div>

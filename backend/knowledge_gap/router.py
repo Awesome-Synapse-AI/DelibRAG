@@ -517,6 +517,38 @@ async def resolve_deprecate_sources(
     return _serialize_ticket(ticket)
 
 
+class UpdateStatusPayload(BaseModel):
+    status: str
+
+
+@router.patch("/{ticket_id}/status")
+async def update_gap_status(
+    ticket_id: str,
+    payload: UpdateStatusPayload,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(require_role(UserRole.manager, UserRole.admin)),
+):
+    from .ticket_manager import TicketStatus
+    
+    # Validate status
+    try:
+        TicketStatus(payload.status)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status: {payload.status}. Must be one of: open, in_progress, resolved, wont_fix"
+        )
+    
+    ticket = await get_gap_ticket(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gap ticket not found")
+    
+    ticket.status = payload.status
+    await db.commit()
+    await db.refresh(ticket)
+    return _serialize_ticket(ticket)
+
+
 @router.delete("/{ticket_id}")
 async def delete_gap(
     ticket_id: str,

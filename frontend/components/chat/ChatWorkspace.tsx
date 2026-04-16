@@ -195,6 +195,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
   const [citationPanel, setCitationPanel] = useState<{ key: string; x: number; y: number } | null>(null);
   const citationLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const citationPanelKeyRef = useRef<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   citationPanelKeyRef.current = citationPanel?.key ?? null;
 
   function clearCitationLeaveTimer() {
@@ -271,6 +272,11 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
     () => messagesBySession[selectedSessionId] ?? [],
     [messagesBySession, selectedSessionId],
   );
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [currentMessages]);
 
   async function loadHistory(sessionId: string) {
     setLoadingHistory(true);
@@ -614,6 +620,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
                 )}
               </article>
             ))}
+            <div ref={messagesEndRef} />
           </div>
         </div>
         <form onSubmit={sendMessage} style={{ borderTop: "1px solid #e2e8f0", padding: 12, background: "white", flexShrink: 0 }}>

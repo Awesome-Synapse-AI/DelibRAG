@@ -32,6 +32,7 @@ body {
   color: var(--text-main);
   background: linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
   min-height: 100vh;
+  overflow: hidden;
 }
 
 a {
@@ -47,8 +48,12 @@ textarea {
 }
 
 .page-shell {
-  min-height: 100vh;
+  height: 100vh;
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .card {

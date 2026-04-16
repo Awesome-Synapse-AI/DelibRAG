@@ -30,7 +30,8 @@ export default function IndexManagementPage() {
 
   return (
     <ProtectedShell title="Index Management" allowedRoles={["admin"]}>
-      <div className="grid-two">
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "auto" }}>
+        <div className="grid-two">
         <section className="card" style={{ padding: 14 }}>
           <div className="heading" style={{ fontWeight: 700, marginBottom: 8 }}>
             File Upload + Index
@@ -67,7 +68,7 @@ export default function IndexManagementPage() {
         </section>
       </div>
 
-      <div className="grid-two" style={{ marginTop: 12 }}>
+      <div className="grid-two">
         <section className="card" style={{ padding: 14 }}>
           <div className="heading" style={{ fontWeight: 700, marginBottom: 8 }}>
             Source Trust Override
@@ -121,18 +122,19 @@ export default function IndexManagementPage() {
       </div>
 
       {error && (
-        <div className="card" style={{ marginTop: 12, borderColor: "#fecaca", background: "#fef2f2", padding: 12 }}>
+        <div className="card" style={{ borderColor: "#fecaca", background: "#fef2f2", padding: 12, flexShrink: 0 }}>
           {error}
         </div>
       )}
       {result && (
-        <div className="card" style={{ marginTop: 12, padding: 12 }}>
+        <div className="card" style={{ padding: 12, flexShrink: 0 }}>
           <div className="heading" style={{ fontWeight: 700, marginBottom: 6 }}>
             Response
           </div>
           <pre style={{ margin: 0, fontSize: 12, overflowX: "auto" }}>{result}</pre>
         </div>
       )}
+      </div>
     </ProtectedShell>
   );
 }

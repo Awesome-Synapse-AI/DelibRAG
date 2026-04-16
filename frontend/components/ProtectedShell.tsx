@@ -78,7 +78,7 @@ export default function ProtectedShell({ title, children, allowedRoles }: Protec
   if (loading) {
     return (
       <main className="page-shell">
-        <div className="card" style={{ padding: 24 }}>
+        <div className="card" style={{ padding: 24, flexShrink: 0 }}>
           Loading...
         </div>
       </main>
@@ -87,7 +87,7 @@ export default function ProtectedShell({ title, children, allowedRoles }: Protec
 
   return (
     <main className="page-shell">
-      <div className="card" style={{ padding: 16, marginBottom: 12 }}>
+      <div className="card" style={{ padding: 16, flexShrink: 0 }}>
         <div
           style={{
             display: "flex",
@@ -129,16 +129,16 @@ export default function ProtectedShell({ title, children, allowedRoles }: Protec
         </div>
       </div>
       {error && (
-        <div className="card" style={{ padding: 12, borderColor: "#fecaca", background: "#fef2f2", marginBottom: 12 }}>
+        <div className="card" style={{ padding: 12, borderColor: "#fecaca", background: "#fef2f2", flexShrink: 0 }}>
           {error}
         </div>
       )}
       {!isAllowed ? (
-        <div className="card" style={{ padding: 16 }}>
+        <div className="card" style={{ padding: 16, flexShrink: 0 }}>
           You do not have permission to access this page.
         </div>
       ) : (
-        children
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>{children}</div>
       )}
     </main>
   );

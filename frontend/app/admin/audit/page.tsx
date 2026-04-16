@@ -74,39 +74,40 @@ export default function AuditViewerPage() {
 
   return (
     <ProtectedShell title="Audit Trail Viewer" allowedRoles={["manager", "admin"]}>
-      <div className="card" style={{ padding: 14, marginBottom: 12 }}>
-        <div className="grid-two">
-          <div style={{ display: "grid", gap: 8 }}>
-            <div className="heading" style={{ fontWeight: 700 }}>
-              Browse by Session
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "100%", overflow: "hidden" }}>
+        <div className="card" style={{ padding: 14, flexShrink: 0 }}>
+          <div className="grid-two">
+            <div style={{ display: "grid", gap: 8 }}>
+              <div className="heading" style={{ fontWeight: 700 }}>
+                Browse by Session
+              </div>
+              <input className="input" placeholder="session_id" value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
+              <button className="btn btn-primary" onClick={() => void loadSessionAudit()} disabled={loading}>
+                Load session entries
+              </button>
             </div>
-            <input className="input" placeholder="session_id" value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
-            <button className="btn btn-primary" onClick={() => void loadSessionAudit()} disabled={loading}>
-              Load session entries
-            </button>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <div className="heading" style={{ fontWeight: 700 }}>
-              Lookup by Query
+            <div style={{ display: "grid", gap: 8 }}>
+              <div className="heading" style={{ fontWeight: 700 }}>
+                Lookup by Query
+              </div>
+              <input className="input" placeholder="query_id" value={queryId} onChange={(e) => setQueryId(e.target.value)} />
+              <button className="btn" onClick={() => void loadQueryAudit()} disabled={loading}>
+                Load single entry
+              </button>
+              <button className="btn" onClick={() => void downloadCsv()}>
+                Export CSV
+              </button>
             </div>
-            <input className="input" placeholder="query_id" value={queryId} onChange={(e) => setQueryId(e.target.value)} />
-            <button className="btn" onClick={() => void loadQueryAudit()} disabled={loading}>
-              Load single entry
-            </button>
-            <button className="btn" onClick={() => void downloadCsv()}>
-              Export CSV
-            </button>
           </div>
+          {error && (
+            <div className="banner banner-warning" style={{ marginTop: 10 }}>
+              {error}
+            </div>
+          )}
         </div>
-        {error && (
-          <div className="banner banner-warning" style={{ marginTop: 10 }}>
-            {error}
-          </div>
-        )}
-      </div>
 
       {singleEntry && (
-        <section className="card" style={{ padding: 14, marginBottom: 12 }}>
+        <section className="card" style={{ padding: 14, flexShrink: 0 }}>
           <div className="heading" style={{ fontWeight: 700, marginBottom: 10 }}>
             Query Audit Detail
           </div>
@@ -114,12 +115,13 @@ export default function AuditViewerPage() {
         </section>
       )}
 
-      <section className="card" style={{ padding: 14 }}>
-        <div className="heading" style={{ fontWeight: 700, marginBottom: 10 }}>
+      <section className="card" style={{ padding: 14, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div className="heading" style={{ fontWeight: 700, marginBottom: 10, flexShrink: 0 }}>
           Session Audit Log
         </div>
         {sortedEntries.length === 0 && !singleEntry && <div className="muted">No entries loaded.</div>}
-        <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <div style={{ display: "grid", gap: 10 }}>
           {sortedEntries.map((entry) => {
             const isOpen = expanded[entry.query_id] ?? false;
             const retrievalPath = entry.retrieval_path ?? {};
@@ -181,8 +183,10 @@ export default function AuditViewerPage() {
               </article>
             );
           })}
+          </div>
         </div>
       </section>
+      </div>
     </ProtectedShell>
   );
 }

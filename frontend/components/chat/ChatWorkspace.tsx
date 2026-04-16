@@ -379,25 +379,26 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
   }
 
   return (
-    <div className="card" style={{ display: "grid", gridTemplateColumns: "280px 1fr", minHeight: "75vh", overflow: "hidden" }}>
-      <aside style={{ borderRight: "1px solid #e2e8f0", background: "#fffaf5", padding: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div className="heading" style={{ fontWeight: 700 }}>
-            Sessions
+    <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <aside style={{ borderRight: "1px solid #e2e8f0", background: "#fffaf5", padding: 12, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexShrink: 0 }}>
+            <div className="heading" style={{ fontWeight: 700 }}>
+              Sessions
+            </div>
+            <button
+              className="btn"
+              onClick={() => {
+                const id = makeSessionId();
+                setSelectedSessionId(id);
+                setMessagesBySession((prev) => ({ ...prev, [id]: [] }));
+                router.replace(`/chat/${id}`);
+              }}
+            >
+              New
+            </button>
           </div>
-          <button
-            className="btn"
-            onClick={() => {
-              const id = makeSessionId();
-              setSelectedSessionId(id);
-              setMessagesBySession((prev) => ({ ...prev, [id]: [] }));
-              router.replace(`/chat/${id}`);
-            }}
-          >
-            New
-          </button>
-        </div>
-        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "grid", gap: 8, overflowY: "auto", flex: 1, minHeight: 0 }}>
           {sessions.map((session) => (
             <div
               key={session.session_id}
@@ -431,8 +432,8 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
           ))}
         </div>
       </aside>
-      <section style={{ display: "grid", gridTemplateRows: "1fr auto", minHeight: 0 }}>
-        <div style={{ padding: 16, overflowY: "auto", background: "#fcfdff" }}>
+      <section style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+        <div style={{ padding: 16, overflowY: "auto", background: "#fcfdff", flex: 1, minHeight: 0 }}>
           {loadingHistory && <div className="muted">Loading history...</div>}
           {!loadingHistory && currentMessages.length === 0 && (
             <div className="muted">Ask anything from your indexed knowledge base.</div>
@@ -584,7 +585,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
             ))}
           </div>
         </div>
-        <form onSubmit={sendMessage} style={{ borderTop: "1px solid #e2e8f0", padding: 12, background: "white" }}>
+        <form onSubmit={sendMessage} style={{ borderTop: "1px solid #e2e8f0", padding: 12, background: "white", flexShrink: 0 }}>
           {error && (
             <div className="banner banner-warning" style={{ marginBottom: 8 }}>
               {error}
@@ -604,6 +605,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
           </div>
         </form>
       </section>
+      </div>
     </div>
   );
 }

@@ -7,7 +7,7 @@ from pathlib import Path
 from llama_index.llms.openai import OpenAI
 
 from agent.confidence_gate import ConfidenceGate
-from agent.memory import load_session_history, save_to_session
+from agent.memory import load_session_history, save_to_session, generate_and_save_title
 from agent.stakes_classifier import StakesClassifier
 from agent.state import AgentState
 from audit.trail import write_audit_entry
@@ -354,17 +354,26 @@ async def audit_log_node(state: AgentState) -> AgentState:
 
 
 async def memory_save_node(state: AgentState) -> AgentState:
+    session_id = state["session_id"]
+    user_id = state["user_id"]
+    query = state.get("query")
+    answer = state.get("answer")
+    
+    # Check if this is the first exchange (for title generation)
+    history = await load_session_history(session_id, window=100)
+    is_first_exchange = len(history) == 0
+    
     await save_to_session(
-        session_id=state["session_id"],
-        user_id=state["user_id"],
-        turn={"role": "user", "content": state.get("query")},
+        session_id=session_id,
+        user_id=user_id,
+        turn={"role": "user", "content": query},
     )
     await save_to_session(
-        session_id=state["session_id"],
-        user_id=state["user_id"],
+        session_id=session_id,
+        user_id=user_id,
         turn={
             "role": "assistant",
-            "content": state.get("answer"),
+            "content": answer,
             "citations": state.get("citations"),
             "citation_details": state.get("citation_details"),
             "confidence": state.get("confidence"),
@@ -373,6 +382,11 @@ async def memory_save_node(state: AgentState) -> AgentState:
             "requires_human_review": state.get("requires_human_review"),
         },
     )
+    
+    # Generate title for the first exchange
+    if is_first_exchange and query and answer:
+        await generate_and_save_title(session_id, query, answer)
+    
     return state
 
 

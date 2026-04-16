@@ -223,7 +223,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
         setSessions(list);
         let sessionId = initialSessionId || list[0]?.session_id || makeSessionId();
         setSelectedSessionId(sessionId);
-        router.replace(`/chat/${sessionId}`);
+        window.history.replaceState(null, "", `/chat/${sessionId}`);
         if (list.some((x) => x.session_id === sessionId)) {
           await loadHistory(sessionId);
         } else {
@@ -247,6 +247,26 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSessionId]);
 
+  function getSessionTitle(session: SessionSummary): string {
+    return session.title || "New conversation";
+  }
+
+  function formatSessionDate(dateStr?: string | null): string {
+    if (!dateStr) return "No activity";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  }
+
   const currentMessages = useMemo(
     () => messagesBySession[selectedSessionId] ?? [],
     [messagesBySession, selectedSessionId],
@@ -257,7 +277,15 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
     setError(null);
     try {
       const detail: SessionDetail = await getSession(sessionId);
-      setMessagesBySession((prev) => ({ ...prev, [sessionId]: toUiMessages(detail.messages ?? []) }));
+      const messages = toUiMessages(detail.messages ?? []);
+      setMessagesBySession((prev) => ({ ...prev, [sessionId]: messages }));
+      
+      // Update session title in the sessions list if it changed
+      if (detail.title) {
+        setSessions((prev) => 
+          prev.map((s) => s.session_id === sessionId ? { ...s, title: detail.title } : s)
+        );
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
         setMessagesBySession((prev) => ({ ...prev, [sessionId]: [] }));
@@ -295,7 +323,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
     const sessionId = selectedSessionId || makeSessionId();
     if (!selectedSessionId) {
       setSelectedSessionId(sessionId);
-      router.replace(`/chat/${sessionId}`);
+      window.history.replaceState(null, "", `/chat/${sessionId}`);
     }
 
     const userMessage: UiMessage = {
@@ -366,7 +394,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
       if (selectedSessionId === sessionId) {
         const nextId = refreshed[0]?.session_id || makeSessionId();
         setSelectedSessionId(nextId);
-        router.replace(`/chat/${nextId}`);
+        window.history.replaceState(null, "", `/chat/${nextId}`);
         if (refreshed.some((x) => x.session_id === nextId)) {
           await loadHistory(nextId);
         } else {
@@ -392,7 +420,7 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
                 const id = makeSessionId();
                 setSelectedSessionId(id);
                 setMessagesBySession((prev) => ({ ...prev, [id]: [] }));
-                router.replace(`/chat/${id}`);
+                window.history.replaceState(null, "", `/chat/${id}`);
               }}
             >
               New
@@ -411,18 +439,21 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
             >
               <button
                 style={{ all: "unset", cursor: "pointer", display: "block", width: "100%" }}
-                onClick={() => {
+                onClick={async (e) => {
+                  e.preventDefault();
+                  if (selectedSessionId === session.session_id) return;
                   setSelectedSessionId(session.session_id);
-                  router.replace(`/chat/${session.session_id}`);
-                  void loadHistory(session.session_id);
+                  window.history.replaceState(null, "", `/chat/${session.session_id}`);
+                  if (!messagesBySession[session.session_id]) {
+                    await loadHistory(session.session_id);
+                  }
                 }}
               >
-                <div style={{ fontWeight: 600, fontSize: 13 }}>{session.session_id.slice(0, 12)}</div>
-                <div className="muted" style={{ fontSize: 12 }}>
-                  {session.message_count} messages
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+                  {getSessionTitle(session)}
                 </div>
                 <div className="muted" style={{ fontSize: 11 }}>
-                  {session.last_active ? new Date(session.last_active).toLocaleString() : "No activity"}
+                  {formatSessionDate(session.last_active)}
                 </div>
               </button>
               <button className="btn" style={{ width: "100%", marginTop: 6 }} onClick={() => void removeSession(session.session_id)}>

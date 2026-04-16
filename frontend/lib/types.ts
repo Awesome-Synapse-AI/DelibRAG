@@ -60,6 +60,7 @@ export interface SessionSummary {
   created_at?: string | null;
   last_active?: string | null;
   message_count: number;
+  title?: string;
 }
 
 export interface SessionDetail extends SessionSummary {

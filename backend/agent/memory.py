@@ -146,3 +146,18 @@ async def get_session(session_id: str, user_id: str) -> dict | None:
     except PyMongoError as exc:
         logger.warning("Mongo unavailable in get_session(session_id=%s): %s", session_id, exc)
         return None
+
+
+
+async def update_session_title(session_id: str, user_id: str, title: str) -> bool:
+    """Update the title of a session."""
+    try:
+        db = get_mongo_db()
+        result = await db.sessions.update_one(
+            {"session_id": session_id, "user_id": user_id},
+            {"$set": {"title": title.strip()}}
+        )
+        return result.modified_count > 0
+    except PyMongoError as exc:
+        logger.warning("Mongo unavailable in update_session_title(session_id=%s): %s", session_id, exc)
+        return False

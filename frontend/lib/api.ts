@@ -172,6 +172,14 @@ export async function deleteSession(sessionId: string): Promise<{ deleted: boole
   });
 }
 
+export async function updateSessionTitle(sessionId: string, title: string): Promise<{ updated: boolean; session_id: string; title: string }> {
+  return apiRequest<{ updated: boolean; session_id: string; title: string }>(`/sessions/${encodeURIComponent(sessionId)}/title`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function listGapTickets(status = "open"): Promise<GapTicket[]> {
   return apiRequest<GapTicket[]>(`/gaps?status=${encodeURIComponent(status)}`);
 }

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { API_BASE_URL, ApiError, deleteSession, getSession, listSessions, postChat } from "@/lib/api";
+import { API_BASE_URL, ApiError, deleteSession, getSession, listSessions, postChat, updateSessionTitle as updateSessionTitleApi } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import type { ChatResponse, SessionDetail, SessionMessage, SessionSummary } from "@/lib/types";
 
@@ -191,6 +191,9 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
   const [query, setQuery] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   /** Open citation panel anchored above the chip (stable position so you can scroll inside). */
   const [citationPanel, setCitationPanel] = useState<{ key: string; x: number; y: number } | null>(null);
   const citationLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -412,6 +415,19 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
     }
   }
 
+  async function updateSessionTitle(sessionId: string, newTitle: string) {
+    try {
+      await updateSessionTitleApi(sessionId, newTitle);
+      setSessions((prev) =>
+        prev.map((s) => (s.session_id === sessionId ? { ...s, title: newTitle } : s))
+      );
+      setEditingSessionId(null);
+      setEditingTitle("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Cannot update session title");
+    }
+  }
+
   return (
     <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", flex: 1, minHeight: 0, overflow: "hidden" }}>
@@ -432,20 +448,30 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
               New
             </button>
           </div>
-          <div style={{ display: "grid", gap: 8, overflowY: "auto", flex: 1, minHeight: 0 }}>
-          {sessions.map((session) => (
-            <div
-              key={session.session_id}
-              style={{
-                border: "1px solid #e2e8f0",
-                borderRadius: 10,
-                padding: 8,
-                background: selectedSessionId === session.session_id ? "#ffedd5" : "#fff",
-              }}
-            >
-              <button
-                style={{ all: "unset", cursor: "pointer", display: "block", width: "100%" }}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, overflowY: "auto", flex: 1, minHeight: 0 }}>
+          {sessions.map((session) => {
+            const isEditing = editingSessionId === session.session_id;
+            const isHovered = hoveredSessionId === session.session_id;
+            
+            return (
+              <div
+                key={session.session_id}
+                onMouseEnter={() => setHoveredSessionId(session.session_id)}
+                onMouseLeave={() => setHoveredSessionId(null)}
+                style={{
+                  position: "relative",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  padding: "0.4em 0.6em",
+                  background: selectedSessionId === session.session_id ? "#ffedd5" : "#fff",
+                  cursor: "pointer",
+                  transition: "background 0.2s",
+                  fontSize: 13,
+                  display: "table",
+                  width: "100%",
+                }}
                 onClick={async (e) => {
+                  if (isEditing) return;
                   e.preventDefault();
                   if (selectedSessionId === session.session_id) return;
                   setSelectedSessionId(session.session_id);
@@ -455,18 +481,124 @@ export default function ChatWorkspace({ initialSessionId }: ChatWorkspaceProps) 
                   }
                 }}
               >
-                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
-                  {getSessionTitle(session)}
+                <div style={{ display: "table-cell", verticalAlign: "middle" }}>
+                {isEditing ? (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      value={editingTitle}
+                      onChange={(e) => setEditingTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          void updateSessionTitle(session.session_id, editingTitle);
+                        } else if (e.key === "Escape") {
+                          setEditingSessionId(null);
+                          setEditingTitle("");
+                        }
+                      }}
+                      onBlur={() => {
+                        if (editingTitle.trim()) {
+                          void updateSessionTitle(session.session_id, editingTitle);
+                        } else {
+                          setEditingSessionId(null);
+                          setEditingTitle("");
+                        }
+                      }}
+                      autoFocus
+                      style={{ 
+                        fontSize: "1em",
+                        padding: "0.2em 0.4em", 
+                        width: "100%", 
+                        margin: 0,
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ 
+                      fontWeight: 600, 
+                      fontSize: "1em",
+                      lineHeight: 1.2,
+                      margin: 0,
+                      marginBottom: "0.1em", 
+                      paddingRight: isHovered ? "4.5em" : 0,
+                    }}>
+                      {getSessionTitle(session)}
+                    </div>
+                    <div style={{ 
+                      color: "#64748b",
+                      fontSize: "0.85em",
+                      lineHeight: 1.2,
+                      margin: 0,
+                    }}>
+                      {formatSessionDate(session.last_active)}
+                    </div>
+                  </>
+                )}
                 </div>
-                <div className="muted" style={{ fontSize: 11 }}>
-                  {formatSessionDate(session.last_active)}
-                </div>
-              </button>
-              <button className="btn" style={{ width: "100%", marginTop: 6 }} onClick={() => void removeSession(session.session_id)}>
-                Delete
-              </button>
-            </div>
-          ))}
+                
+                {isHovered && !isEditing && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "50%",
+                      right: "0.5em",
+                      transform: "translateY(-50%)",
+                      display: "flex",
+                      gap: "0.3em",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      style={{
+                        padding: "0.3em 0.5em",
+                        fontSize: "0.85em",
+                        background: "#fff",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        lineHeight: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingSessionId(session.session_id);
+                        setEditingTitle(getSessionTitle(session));
+                      }}
+                      title="Edit title"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      style={{
+                        padding: "0.3em 0.5em",
+                        fontSize: "0.85em",
+                        background: "#fff",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        lineHeight: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void removeSession(session.session_id);
+                      }}
+                      title="Delete session"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </aside>
       <section style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>

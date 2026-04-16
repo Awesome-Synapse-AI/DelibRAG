@@ -380,3 +380,21 @@ async def delete_session(session_id: str, user=Depends(get_current_user)):
     if not deleted:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
     return {"deleted": True, "session_id": session_id}
+
+
+class UpdateSessionTitleRequest(BaseModel):
+    title: str
+
+
+@router.patch("/sessions/{session_id}/title")
+async def update_session_title(
+    session_id: str,
+    payload: UpdateSessionTitleRequest,
+    user=Depends(get_current_user)
+):
+    from agent.memory import update_session_title as update_title_store
+    
+    success = await update_title_store(session_id, str(user.id), payload.title)
+    if not success:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+    return {"updated": True, "session_id": session_id, "title": payload.title}

@@ -33,6 +33,9 @@ export default function AuditViewerPage() {
     try {
       const data = await getAuditBySession(sessionId.trim());
       setEntries(data);
+      if (data.length === 0) {
+        setError("No audit entries found for this session. Note: Only high-stakes queries create audit entries.");
+      }
     } catch (err) {
       setEntries([]);
       setError(err instanceof ApiError ? err.message : "Cannot load session audit");
@@ -119,7 +122,14 @@ export default function AuditViewerPage() {
         <div className="heading" style={{ fontWeight: 700, marginBottom: 10, flexShrink: 0 }}>
           Session Audit Log
         </div>
-        {sortedEntries.length === 0 && !singleEntry && <div className="muted">No entries loaded.</div>}
+        {sortedEntries.length === 0 && !singleEntry && !loading && (
+          <div className="muted">
+            No entries loaded. Enter a session ID above to load audit entries.
+            <br />
+            <small>Note: Only high-stakes queries create audit entries.</small>
+          </div>
+        )}
+        {loading && <div className="muted">Loading...</div>}
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <div style={{ display: "grid", gap: 10 }}>
           {sortedEntries.map((entry) => {

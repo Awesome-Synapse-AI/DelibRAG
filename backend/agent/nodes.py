@@ -342,11 +342,14 @@ async def gap_ticket_create_node(state: AgentState) -> AgentState:
 
 @traceable(name="audit_log", run_type="chain")
 async def audit_log_node(state: AgentState) -> AgentState:
+    # Generate query_id for all queries (not just high stakes)
+    query_id = state.get("query_id") or str(uuid.uuid4())
+    state["query_id"] = query_id
+    
+    # Only create detailed audit entry for high stakes queries
     if state.get("stakes_level") != "high":
         return state
 
-    query_id = state.get("query_id") or str(uuid.uuid4())
-    state["query_id"] = query_id
     audit = state.get("audit_trail") or {}
     entry = {
         "session_id": state.get("session_id"),

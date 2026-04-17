@@ -314,6 +314,9 @@ async def gap_detect_node(state: AgentState) -> AgentState:
 
 @traceable(name="gap_ticket_create", run_type="chain")
 async def gap_ticket_create_node(state: AgentState) -> AgentState:
+    # Initialize the flag
+    state["gap_ticket_created"] = False
+    
     if state.get("role_topic_mismatch"):
         state.pop("gap_ticket_preview", None)
         if state.get("gap_ticket_id") == "pending":
@@ -328,11 +331,12 @@ async def gap_ticket_create_node(state: AgentState) -> AgentState:
 
     try:
         ticket = await create_gap_ticket(db, payload)
+        state["gap_ticket_id"] = str(ticket.id)
+        state["gap_ticket_created"] = True  # Mark as created
     except Exception:
         logger.exception("Failed to create knowledge-gap ticket (query=%s)", state.get("query"))
         return state
 
-    state["gap_ticket_id"] = str(ticket.id)
     return state
 
 

@@ -219,6 +219,7 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user), db: AsyncSe
         "confidence": result.get("confidence"),
         "stakes_level": result.get("stakes_level"),
         "gap_ticket_id": result.get("gap_ticket_id"),
+        "gap_ticket_created": result.get("gap_ticket_created", False),
         "requires_human_review": result.get("requires_human_review"),
         "query_id": result.get("query_id"),
     }
@@ -354,9 +355,7 @@ async def chat_stream(
                         else:
                             working_state = await high_stakes_retrieve_node(working_state)
                         
-                        working_state = await gap_detect_node(working_state)
-                        
-                        # Generate answer
+                        # Generate answer (removed premature gap_detect_node call)
                         final_text = ""
                         if working_state.get("role_topic_mismatch"):
                             final_text = role_mismatch_answer_text(working_state)
@@ -376,7 +375,7 @@ async def chat_stream(
                             working_state["citations"] = extract_citations(nodes)
                             working_state["citation_details"] = extract_citation_details(nodes)
                         
-                        # Post-processing
+                        # Post-processing - gap detection happens AFTER answer generation
                         working_state = await confidence_check_node(working_state)
                         working_state = await gap_detect_node(working_state)
                         working_state = await gap_ticket_create_node(working_state)
@@ -390,6 +389,7 @@ async def chat_stream(
                         "confidence": working_state.get("confidence"),
                         "stakes_level": working_state.get("stakes_level"),
                         "gap_ticket_id": working_state.get("gap_ticket_id"),
+                        "gap_ticket_created": working_state.get("gap_ticket_created", False),
                         "requires_human_review": working_state.get("requires_human_review"),
                     })
         else:
@@ -410,8 +410,7 @@ async def chat_stream(
                 else:
                     working_state = await high_stakes_retrieve_node(working_state)
                 
-                working_state = await gap_detect_node(working_state)
-                
+                # Generate answer (removed premature gap_detect_node call)
                 final_text = ""
                 if working_state.get("role_topic_mismatch"):
                     final_text = role_mismatch_answer_text(working_state)
@@ -431,6 +430,7 @@ async def chat_stream(
                     working_state["citations"] = extract_citations(nodes)
                     working_state["citation_details"] = extract_citation_details(nodes)
                 
+                # Post-processing - gap detection happens AFTER answer generation
                 working_state = await confidence_check_node(working_state)
                 working_state = await gap_detect_node(working_state)
                 working_state = await gap_ticket_create_node(working_state)
@@ -458,6 +458,7 @@ async def chat_stream(
                     "confidence": working_state.get("confidence"),
                     "stakes_level": working_state.get("stakes_level"),
                     "gap_ticket_id": working_state.get("gap_ticket_id"),
+                    "gap_ticket_created": working_state.get("gap_ticket_created", False),
                     "requires_human_review": working_state.get("requires_human_review"),
                     "query_id": working_state.get("query_id"),
                 }

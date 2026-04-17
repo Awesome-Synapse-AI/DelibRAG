@@ -80,6 +80,7 @@ export interface ChatResponse {
   confidence?: number | null;
   stakes_level?: "low" | "high" | string;
   gap_ticket_id?: string | null;
+  gap_ticket_created?: boolean;
   requires_human_review?: boolean;
   query_id?: string;
 }

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core import StorageContext, VectorStoreIndex
+from langsmith import traceable
 
 from auth.dependencies import get_current_user
 from agent.graph import build_agent_graph
@@ -37,10 +38,10 @@ from agent.nodes import (
 )
 from agent.state import AgentState
 from agent.stakes_classifier import StakesClassifier
+from agent.tracing import is_tracing_enabled
 from config import get_settings
 from db.postgres import get_db
 from indexing.pipeline import get_collection_persist_dir
-
 
 router = APIRouter()
 
@@ -166,6 +167,25 @@ def _build_index_for_department(department: str):
     return collection, index, storage_context
 
 
+@traceable(run_type="chain", name="DelibRAG_Chat")
+async def run_agent_graph(graph, state: AgentState):
+    """Wrapper to trace the entire graph execution as a single tree."""
+    from langchain_core.runnables import RunnableConfig
+    
+    config = RunnableConfig(
+        run_name="Agent_Graph",
+        tags=["chat", f"role_{state.get('user_role', 'unknown')}"],
+        metadata={
+            "session_id": state.get("session_id"),
+            "user_role": state.get("user_role"),
+            "user_department": state.get("user_department"),
+            "query": state.get("query", "")[:100],
+        }
+    )
+    
+    return await graph.ainvoke(state, config=config)
+
+
 @router.post("/chat")
 async def chat(payload: ChatRequest, user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
@@ -188,7 +208,10 @@ async def chat(payload: ChatRequest, user=Depends(get_current_user), db: AsyncSe
         "storage_context": storage_context,
         "db": db,
     }
-    result = await graph.ainvoke(state)
+    
+    # Use traceable wrapper to create a single root trace
+    result = await run_agent_graph(graph, state)
+    
     return {
         "answer": result.get("answer"),
         "citations": result.get("citations"),
@@ -268,6 +291,8 @@ async def chat_stream(
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    import langsmith as ls
+    
     settings = get_settings()
     if not (settings.openai_api_key or os.getenv("OPENAI_API_KEY")):
         raise HTTPException(
@@ -290,55 +315,137 @@ async def chat_stream(
     async def event_stream():
         working_state: AgentState = dict(state)
         working_state["db"] = db
+        
+        # Create trace inputs
+        trace_inputs = {
+            "session_id": session_id,
+            "query": query,
+            "user_role": working_state["user_role"],
+            "user_department": working_state["user_department"],
+        }
+        
+        # Execute with or without tracing
+        if is_tracing_enabled():
+            # Use tracing context to ensure all @traceable decorated functions nest properly
+            with ls.tracing_context(
+                project_name=settings.langsmith_project,
+                tags=["chat", f"role_{working_state['user_role']}"],
+                metadata={"session_id": session_id}
+            ):
+                with ls.trace(
+                    name="DelibRAG_Chat_Stream",
+                    run_type="chain",
+                    inputs=trace_inputs,
+                ) as rt:
+                    # Execute all nodes - each has @traceable decorator so will appear as child
+                    working_state = await load_history_node(working_state)
+                    working_state = await scope_check_node(working_state)
+                    scope_in = bool((working_state.get("scope_result") or {}).get("in_scope"))
 
-        working_state = await load_history_node(working_state)
-        working_state = await scope_check_node(working_state)
-        scope_in = bool((working_state.get("scope_result") or {}).get("in_scope"))
-
-        if not scope_in:
-            working_state = await out_of_scope_response_node(working_state)
-        else:
-            working_state = await stakes_classify_node(working_state)
-            stakes = working_state.get("stakes_level", "high")
-            if stakes == "low":
-                working_state = await low_stakes_retrieve_node(working_state)
-            else:
-                working_state = await high_stakes_retrieve_node(working_state)
-            working_state = await gap_detect_node(working_state)
-
-            streamed_text = ""
-            if working_state.get("role_topic_mismatch"):
-                streamed_text = role_mismatch_answer_text(working_state)
-                working_state["answer"] = streamed_text
-                working_state["citations"] = []
-                working_state["citation_details"] = []
-                yield f"data: {json.dumps({'type':'chunk','content': streamed_text})}\n\n"
-            else:
-                prompt = build_prompt(working_state)
-                async for piece in answer_stream(prompt):
-                    if not piece:
-                        continue
-                    # Handle both cumulative and token-delta stream styles.
-                    delta = piece
-                    if piece.startswith(streamed_text):
-                        delta = piece[len(streamed_text) :]
-                        streamed_text = piece
+                    if not scope_in:
+                        working_state = await out_of_scope_response_node(working_state)
+                        final_text = working_state.get("answer", "")
                     else:
-                        streamed_text += piece
-                    if delta:
-                        yield f"data: {json.dumps({'type':'chunk','content':delta})}\n\n"
+                        working_state = await stakes_classify_node(working_state)
+                        stakes = working_state.get("stakes_level", "high")
+                        
+                        if stakes == "low":
+                            working_state = await low_stakes_retrieve_node(working_state)
+                        else:
+                            working_state = await high_stakes_retrieve_node(working_state)
+                        
+                        working_state = await gap_detect_node(working_state)
+                        
+                        # Generate answer
+                        final_text = ""
+                        if working_state.get("role_topic_mismatch"):
+                            final_text = role_mismatch_answer_text(working_state)
+                            working_state["answer"] = final_text
+                            working_state["citations"] = []
+                            working_state["citation_details"] = []
+                        else:
+                            prompt = build_prompt(working_state)
+                            async for piece in answer_stream(prompt):
+                                if piece:
+                                    if piece.startswith(final_text):
+                                        final_text = piece
+                                    else:
+                                        final_text += piece
+                            working_state["answer"] = final_text
+                            nodes = working_state.get("retrieved_nodes") or []
+                            working_state["citations"] = extract_citations(nodes)
+                            working_state["citation_details"] = extract_citation_details(nodes)
+                        
+                        # Post-processing
+                        working_state = await confidence_check_node(working_state)
+                        working_state = await gap_detect_node(working_state)
+                        working_state = await gap_ticket_create_node(working_state)
+                        working_state = await audit_log_node(working_state)
+                        working_state = await memory_save_node(working_state)
+                    
+                    # Set trace outputs
+                    rt.end(outputs={
+                        "answer": working_state.get("answer", ""),
+                        "citations": working_state.get("citations", []),
+                        "confidence": working_state.get("confidence"),
+                        "stakes_level": working_state.get("stakes_level"),
+                        "gap_ticket_id": working_state.get("gap_ticket_id"),
+                        "requires_human_review": working_state.get("requires_human_review"),
+                    })
+        else:
+            # Execute without tracing
+            working_state = await load_history_node(working_state)
+            working_state = await scope_check_node(working_state)
+            scope_in = bool((working_state.get("scope_result") or {}).get("in_scope"))
 
-                working_state["answer"] = streamed_text
-                nodes = working_state.get("retrieved_nodes") or []
-                working_state["citations"] = extract_citations(nodes)
-                working_state["citation_details"] = extract_citation_details(nodes)
-            working_state = await confidence_check_node(working_state)
-            working_state = await gap_detect_node(working_state)
-            working_state = await gap_ticket_create_node(working_state)
+            if not scope_in:
+                working_state = await out_of_scope_response_node(working_state)
+                final_text = working_state.get("answer", "")
+            else:
+                working_state = await stakes_classify_node(working_state)
+                stakes = working_state.get("stakes_level", "high")
+                
+                if stakes == "low":
+                    working_state = await low_stakes_retrieve_node(working_state)
+                else:
+                    working_state = await high_stakes_retrieve_node(working_state)
+                
+                working_state = await gap_detect_node(working_state)
+                
+                final_text = ""
+                if working_state.get("role_topic_mismatch"):
+                    final_text = role_mismatch_answer_text(working_state)
+                    working_state["answer"] = final_text
+                    working_state["citations"] = []
+                    working_state["citation_details"] = []
+                else:
+                    prompt = build_prompt(working_state)
+                    async for piece in answer_stream(prompt):
+                        if piece:
+                            if piece.startswith(final_text):
+                                final_text = piece
+                            else:
+                                final_text += piece
+                    working_state["answer"] = final_text
+                    nodes = working_state.get("retrieved_nodes") or []
+                    working_state["citations"] = extract_citations(nodes)
+                    working_state["citation_details"] = extract_citation_details(nodes)
+                
+                working_state = await confidence_check_node(working_state)
+                working_state = await gap_detect_node(working_state)
+                working_state = await gap_ticket_create_node(working_state)
+                working_state = await audit_log_node(working_state)
+                working_state = await memory_save_node(working_state)
+        
+        # Stream the answer to client
+        if final_text:
+            # Stream in chunks
+            chunk_size = 50
+            for i in range(0, len(final_text), chunk_size):
+                chunk = final_text[i:i+chunk_size]
+                yield f"data: {json.dumps({'type':'chunk','content':chunk})}\n\n"
 
-        working_state = await audit_log_node(working_state)
-        working_state = await memory_save_node(working_state)
-
+        # Send final message
         answer = working_state.get("answer") or ""
         yield (
             "data: "

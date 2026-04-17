@@ -25,6 +25,9 @@ services:
       - MONGO_URI=mongodb://mongo:27017
       - MONGO_DB_NAME=delibrag
       - SAMPLE_DOCS_DIR=/sample-docs
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-delibrag}
+      - LANGSMITH_TRACING_ENABLED=${LANGSMITH_TRACING_ENABLED:-false}
     volumes:
       - ./backend:/app
       - ./scripts:/app/scripts:ro

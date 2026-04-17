@@ -20,4 +20,5 @@ openai
 motor
 langgraph
 langchain-core
+langsmith
 python-multipart

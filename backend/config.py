@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://mongo:27017"
     mongo_db_name: str = "delibrag"
     openai_api_key: str = ""
+    langsmith_api_key: str = ""
+    langsmith_project: str = "delibrag"
+    langsmith_tracing_enabled: bool = False
 
     _backend_dir = Path(__file__).resolve().parent
     _env_paths = (

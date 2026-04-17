@@ -2,12 +2,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
+from agent.tracing import configure_langsmith
 from auth.router import router as auth_router
 from knowledge_gap.router import router as gap_router
 from agent.router import router as chat_router
 from indexing.router import router as indexing_router
 from audit.router import router as audit_router
 
+# Configure LangSmith tracing before anything else
+configure_langsmith()
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)

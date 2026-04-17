@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from llama_index.llms.openai import OpenAI
+from langsmith import traceable
 
 from agent.confidence_gate import ConfidenceGate
 from agent.memory import load_session_history, save_to_session, generate_and_save_title
@@ -129,6 +130,7 @@ def build_prompt(state: AgentState) -> str:
     )
 
 
+@traceable(name="scope_check", run_type="chain")
 async def scope_check_node(state: AgentState) -> AgentState:
     classifier = ScopeClassifier(department=state.get("user_department"))
     result = classifier.classify(state["query"])
@@ -149,6 +151,7 @@ async def scope_check_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="stakes_classify", run_type="chain")
 async def stakes_classify_node(state: AgentState) -> AgentState:
     classifier = StakesClassifier()
     classification = await classifier.classify(query=state["query"], user_role=state.get("user_role", ""))
@@ -164,6 +167,7 @@ async def retrieve_node(state: AgentState) -> AgentState:
     return await high_stakes_retrieve_node(state)
 
 
+@traceable(name="low_stakes_retrieve", run_type="retriever")
 async def low_stakes_retrieve_node(state: AgentState) -> AgentState:
     retriever = get_retriever_for_user(state)
     nodes = await retriever.aretrieve(state["query"])
@@ -176,6 +180,7 @@ async def low_stakes_retrieve_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="high_stakes_retrieve", run_type="retriever")
 async def high_stakes_retrieve_node(state: AgentState) -> AgentState:
     retriever = get_retriever_for_user(state)
     base_query = state["query"]
@@ -240,6 +245,7 @@ async def answer_generate_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="answer_stream", run_type="llm")
 async def answer_stream(prompt: str):
     llm = get_llm(max_tokens=2048)
     stream = await llm.astream_complete(prompt)
@@ -254,6 +260,7 @@ async def answer_stream(prompt: str):
             yield text
 
 
+@traceable(name="confidence_check", run_type="chain")
 async def confidence_check_node(state: AgentState) -> AgentState:
     if state.get("role_topic_mismatch"):
         state["confidence"] = 1.0
@@ -264,6 +271,7 @@ async def confidence_check_node(state: AgentState) -> AgentState:
     return await gate.evaluate(state)
 
 
+@traceable(name="out_of_scope_response", run_type="chain")
 async def out_of_scope_response_node(state: AgentState) -> AgentState:
     state["answer"] = "This question appears outside the current knowledge base scope."
     state["citations"] = []
@@ -285,6 +293,7 @@ async def role_mismatch_response_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="gap_detect", run_type="chain")
 async def gap_detect_node(state: AgentState) -> AgentState:
     # Preserve first detected gap to keep deterministic precedence:
     # missing_knowledge/contradiction (pre-answer) before low_confidence (post-answer).
@@ -303,6 +312,7 @@ async def gap_detect_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="gap_ticket_create", run_type="chain")
 async def gap_ticket_create_node(state: AgentState) -> AgentState:
     if state.get("role_topic_mismatch"):
         state.pop("gap_ticket_preview", None)
@@ -326,6 +336,7 @@ async def gap_ticket_create_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="audit_log", run_type="chain")
 async def audit_log_node(state: AgentState) -> AgentState:
     if state.get("stakes_level") != "high":
         return state
@@ -353,6 +364,7 @@ async def audit_log_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="memory_save", run_type="chain")
 async def memory_save_node(state: AgentState) -> AgentState:
     session_id = state["session_id"]
     user_id = state["user_id"]
@@ -390,6 +402,7 @@ async def memory_save_node(state: AgentState) -> AgentState:
     return state
 
 
+@traceable(name="load_history", run_type="chain")
 async def load_history_node(state: AgentState) -> AgentState:
     history = await load_session_history(state["session_id"])
     state["messages"] = history

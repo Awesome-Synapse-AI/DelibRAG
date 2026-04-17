@@ -9,7 +9,7 @@ LangSmith tracing has been implemented to track the complete execution flow of t
 The following environment variables must be set in `.env`:
 
 ```env
-LANGSMITH_API_KEY=<your-langsmith-api-key>
+LANGSMITH_API_KEY=your_api_key
 LANGSMITH_PROJECT=DelibRAG
 LANGSMITH_TRACING_ENABLED=true
 ```

@@ -62,47 +62,6 @@ The system is designed for organizations that need reliable, auditable, and cont
 - **Session Management**: Persistent chat history with automatic title generation
 
 
-## System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          Next.js Frontend                           │
-│   Chat UI │ Knowledge Gap Dashboard │ Audit Trail │ Admin Console   │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │ REST / WebSocket
-┌────────────────────────────▼────────────────────────────────────────┐
-│                      FastAPI Backend                                 │
-│                                                                      │
-│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────────┐  │
-│  │  Auth Module │  │  Indexing Module  │  │   Chat/Agent Module  │  │
-│  │  (JWT + RBAC)│  │  (LlamaIndex)     │  │   (LangGraph)        │  │
-│  └──────────────┘  └──────────────────┘  └──────────────────────┘  │
-│                                                                      │
-│  ┌──────────────────────┐  ┌──────────────────────────────────────┐ │
-│  │  Scope Classifier    │  │  Stakes Classifier + Audit Logger    │ │
-│  │  (LDA + topic model) │  │                                      │ │
-│  └──────────────────────┘  └──────────────────────────────────────┘ │
-│                                                                      │
-│  ┌────────────────────────────────────────────────────────────────┐ │
-│  │  Knowledge Gap Engine                                          │ │
-│  │  Gap Detector │ Ticket Manager │ Resolution Ingestion          │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────────┘
-         │                    │                     │
-┌────────▼────────┐  ┌────────▼───────┐   ┌────────▼────────┐
-│   PostgreSQL    │  │   MongoDB       │   │  Qdrant Vector  │
-│   (accounts,    │  │  (chat sessions,│   │  Store          │
-│   gap tickets,  │  │   audit trails) │   │                 │
-│   trust scores) │  └─────────────────┘   └─────────────────┘
-└─────────────────┘
-         │
-┌────────▼────────┐
-│   LangSmith     │
-│   (Optional)    │
-└─────────────────┘
-```
-
-
 ## Technology Stack
 
 ![Tech Stack](tech-stack.png)

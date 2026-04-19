@@ -401,7 +401,7 @@ export default function GapDashboardPage() {
                             try {
                               const token = getAccessToken();
                               if (!token) throw new Error('Not authenticated');
-                              const response = await fetch(`${API_BASE_URL}/knowledge-gap/${selectedTicket.id}/status`, {
+                              const response = await fetch(`${API_BASE_URL}/gaps/${selectedTicket.id}/status`, {
                                 method: 'PATCH',
                                 headers: {
                                   'Content-Type': 'application/json',

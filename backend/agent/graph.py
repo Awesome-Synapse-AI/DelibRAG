@@ -27,7 +27,6 @@ def build_agent_graph():
     graph.add_node("low_stakes_retrieve", low_stakes_retrieve_node)
     graph.add_node("high_stakes_retrieve", high_stakes_retrieve_node)
     graph.add_node("gap_detect", gap_detect_node)
-    graph.add_node("gap_detect_post_confidence", gap_detect_node)
     graph.add_node("gap_ticket_create", gap_ticket_create_node)
     graph.add_node("answer_generate", answer_generate_node)
     graph.add_node("confidence_check", confidence_check_node)
@@ -74,11 +73,24 @@ def build_agent_graph():
 
     graph.add_edge("low_stakes_retrieve", "gap_detect")
     graph.add_edge("high_stakes_retrieve", "gap_detect")
-    graph.add_edge("gap_detect", "answer_generate")
+
+    def route_after_gap_detect(state: AgentState):
+        if state.get("gap_ticket_id") == "pending":
+            return "gap_ticket_create"
+        return "answer_generate"
+
+    graph.add_conditional_edges(
+        "gap_detect",
+        route_after_gap_detect,
+        {
+            "gap_ticket_create": "gap_ticket_create",
+            "answer_generate": "answer_generate",
+        },
+    )
+
+    graph.add_edge("gap_ticket_create", "answer_generate")
     graph.add_edge("answer_generate", "confidence_check")
-    graph.add_edge("confidence_check", "gap_detect_post_confidence")
-    graph.add_edge("gap_detect_post_confidence", "gap_ticket_create")
-    graph.add_edge("gap_ticket_create", "audit_log")
+    graph.add_edge("confidence_check", "audit_log")
     graph.add_edge("audit_log", "memory_save")
     graph.add_edge("out_of_scope_response", "audit_log")
     graph.add_edge("role_mismatch_response", "audit_log")
